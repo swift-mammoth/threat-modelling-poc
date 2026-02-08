@@ -1,28 +1,25 @@
-#!/bin/bash
-# Google OAuth Setup Guide
 
-echo "Google OAuth Configuration for Secure Container"
-echo "=============================================="
-echo ""
-echo "1. Go to: https://console.cloud.google.com"
-echo "2. Create/Select project"
-echo "3. APIs & Services → Credentials"
-echo "4. Create OAuth 2.0 Client ID"
-echo "5. Application type: Web application"
-echo "6. Authorized redirect URIs:"
-echo "   - https://your-domain.com/component/streamlit_oauth.oauth2_component"
-echo "   - http://localhost:8000/component/streamlit_oauth.oauth2_component"
-echo ""
-echo "7. Add to Azure Container Instance:"
-echo ""
-echo "az container create \\"
-echo "  --environment-variables \\"
-echo "    REQUIRE_AUTH=true \\"
-echo "    GOOGLE_CLIENT_ID=your-client-id \\"
-echo "    APP_URL=https://your-domain.com \\"
-echo "    AUTHORIZED_EMAILS=user1@company.com,user2@company.com \\"
-echo "  --secure-environment-variables \\"
-echo "    GOOGLE_CLIENT_SECRET=your-secret"
-echo ""
+
+# Google OAuth Configuration for Secure Container
+==============================================
+
+1. Go to: https://console.cloud.google.com
+2. Create/Select project
+3. APIs & Services → Credentials"
+4. Create OAuth 2.0 Client ID"
+5. Application type: Web application"
+6. Authorized redirect URIs:"
+   - https://your-domain.com/component/streamlit_oauth.oauth2_component"
+   - http://localhost:8000/component/streamlit_oauth.oauth2_component"
+
+7. Add to Azure Container Instance:"
+az container create \
+  --environment-variables \
+    REQUIRE_AUTH=true \
+    GOOGLE_CLIENT_ID=your-client-id \
+    APP_URL=https://your-domain.com \
+    AUTHORIZED_EMAILS=user1@company.com,user2@company.com \
+  --secure-environment-variables \
+    GOOGLE_CLIENT_SECRET=your-secret"
 echo "For development/testing, disable auth:"
 echo "  REQUIRE_AUTH=false"
