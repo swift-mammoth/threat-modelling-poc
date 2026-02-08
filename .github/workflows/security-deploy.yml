@@ -12,6 +12,11 @@ on:
   schedule:
     - cron: '0 0 * * 1'  # Weekly Monday
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   REGISTRY: threatmodelingacr.azurecr.io
   IMAGE_NAME: threat-modeling
@@ -23,8 +28,9 @@ jobs:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
     permissions:
-      security-events: write
       contents: read
+      security-events: write
+      actions: read
     
     steps:
     - name: Checkout
