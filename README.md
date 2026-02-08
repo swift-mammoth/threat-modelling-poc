@@ -1,5 +1,7 @@
 # AI Threat Modeling - Security Enhanced
 
+## This project borrows heavily from https://github.com/build-on-aws/threat-model-accelerator-with-genai
+
 ## Structure
 
 ```
