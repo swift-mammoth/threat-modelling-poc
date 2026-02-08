@@ -15,7 +15,7 @@ on:
 env:
   REGISTRY: threatmodelingacr.azurecr.io
   IMAGE_NAME: threat-modeling
-  RESOURCE_GROUP: rg-threat-modeling-poc
+  RESOURCE_GROUP: threat-modeling-poc
   CONTAINER_APP_NAME: threat-modeling
 
 jobs:
