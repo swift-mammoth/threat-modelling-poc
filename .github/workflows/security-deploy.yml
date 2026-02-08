@@ -10,8 +10,23 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * 1'  # Weekly Monday
-
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - develop
+      skip_tests:
+        description: 'Skip security scans'
+        required: false
+        type: boolean
+        default: false
+        
 permissions:
   contents: read
   security-events: write
