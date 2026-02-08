@@ -11,8 +11,6 @@ APP_URL = os.getenv("APP_URL", "http://localhost:8000")
 AUTHORIZED_EMAILS = os.getenv("AUTHORIZED_EMAILS", "").split(",") if os.getenv("AUTHORIZED_EMAILS") else []
 REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "true").lower() == "true"
 
-st.set_page_config(page_title="AI Threat Modeling Assistant", page_icon="🛡️", layout="wide")
-
 def check_auth():
     """Check if user is authenticated"""
     if not REQUIRE_AUTH:
@@ -21,6 +19,8 @@ def check_auth():
 
 def show_login():
     """Show login screen with Google OAuth"""
+    st.set_page_config(page_title="AI Threat Modeling Assistant", page_icon="🛡️", layout="wide")
+    
     st.title("🛡️ AI Threat Modeling Assistant")
     st.markdown("### Secure Access Required")
     
@@ -52,7 +52,7 @@ def show_app():
     # Import all the functions from the base app
     exec(open('/app/app_main.py').read(), globals())
     
-    # Add logout button
+    # Add logout button to sidebar
     with st.sidebar:
         if REQUIRE_AUTH:
             st.markdown("---")
@@ -66,3 +66,4 @@ if not check_auth():
     show_login()
 else:
     show_app()
+

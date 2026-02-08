@@ -25,10 +25,36 @@
 - **Dependabot**: Automated dependency updates
 - **OAuth**: Google authentication (production only)
 - **Dual builds**: Insecure (test) + Secure (prod)
+- **Azure Container Apps**: HTTPS enabled, auto-scaling
 
 ## Setup
 
-### 1. GitHub Secrets
+### 1. Deploy to Azure Container Apps
+
+**Initial deployment (manual):**
+
+```bash
+# Deploy Container App with OAuth
+az containerapp create \
+  --name threat-modeling \
+  --resource-group rg-threat-modeling-poc \
+  --environment threat-modeling-env \
+  --image threatmodelingacr.azurecr.io/threat-modeling:latest \
+  --registry-server threatmodelingacr.azurecr.io \
+  --target-port 8000 \
+  --ingress external \
+  --cpu 1.0 --memory 2.0Gi \
+  --set-env-vars \
+    AZURE_OPENAI_ENDPOINT="https://..." \
+    AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
+    REQUIRE_AUTH="true" \
+    AUTHORIZED_EMAILS="user@company.com" \
+  --replace-env-vars \
+    AZURE_OPENAI_KEY="your-key" \
+    GOOGLE_CLIENT_SECRET="your-secret"
+```
+
+### 2. GitHub Secrets
 
 Add to repository secrets:
 
@@ -38,14 +64,14 @@ ACR_PASSWORD=[from Azure]
 AZURE_CREDENTIALS=[service principal JSON]
 ```
 
-### 2. Enable GitHub Advanced Security
+### 3. Enable GitHub Advanced Security
 
 1. Repository → Settings → Code security and analysis
 2. Enable "CodeQL analysis"
 3. Enable "Dependabot alerts"
 4. Enable "Dependabot security updates"
 
-### 3. Deploy
+### 4. Deploy
 
 **Test build** (any branch):
 ```bash
@@ -57,7 +83,7 @@ git push origin develop
 ```bash
 git push origin main
 # Builds secure version with OAuth
-# Auto-deploys to Azure
+# Auto-deploys to Azure Container Apps
 ```
 
 ## Environment Variables
@@ -77,15 +103,31 @@ REQUIRE_AUTH=true
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 AUTHORIZED_EMAILS=user@company.com,user2@company.com
-APP_URL=https://your-domain.com
+APP_URL=https://your-containerapp-url.azurecontainerapps.io
 ```
 
 ## Workflow
 
 1. **Push to develop** → Insecure build for testing
-2. **Push to main** → Secure build → Auto-deploy to production
+2. **Push to main** → Secure build → Auto-deploy to Container Apps
 3. **Weekly** → Security scans run automatically
 4. **Dependabot** → Creates PRs for updates
+
+## Deployment Target
+
+**Azure Container Apps** (not Container Instances)
+- Automatic HTTPS with managed certificate
+- Auto-scaling support
+- Environment variable updates without recreation
+- Cost: ~$20-30/month
+
+**GitHub Actions deploys via:**
+```bash
+az containerapp update \
+  --name threat-modeling \
+  --resource-group rg-threat-modeling-poc \
+  --image threatmodelingacr.azurecr.io/threat-modeling:latest
+```
 
 ## Security Scans
 

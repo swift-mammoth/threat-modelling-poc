@@ -15,7 +15,7 @@ on:
 env:
   REGISTRY: threatmodelingacr.azurecr.io
   IMAGE_NAME: threat-modeling
-  RESOURCE_GROUP: threat-modeling-poc
+  RESOURCE_GROUP: rg-threat-modeling-poc
   CONTAINER_APP_NAME: threat-modeling
 
 jobs:
@@ -28,19 +28,19 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
     
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
+      uses: github/codeql-action/init@v3
       with:
         languages: python
         queries: security-and-quality
     
     - name: Autobuild
-      uses: github/codeql-action/autobuild@v4
+      uses: github/codeql-action/autobuild@v3
     
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4
+      uses: github/codeql-action/analyze@v3
       with:
         category: "/language:python"
 
@@ -54,7 +54,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
     
     - name: Dependency Review
       uses: actions/dependency-review-action@v4
@@ -72,7 +72,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
     
     - name: Log in to ACR
       uses: docker/login-action@v3
@@ -82,7 +82,7 @@ jobs:
         password: ${{ secrets.ACR_PASSWORD }}
     
     - name: Build and push
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v5
       with:
         context: ./container
         push: true
@@ -100,7 +100,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v4
     
     - name: Log in to ACR
       uses: docker/login-action@v3
@@ -110,7 +110,7 @@ jobs:
         password: ${{ secrets.ACR_PASSWORD }}
     
     - name: Build and push
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@v5
       with:
         context: ./container-secure
         push: true
@@ -126,25 +126,48 @@ jobs:
         output: 'trivy-results.sarif'
     
     - name: Upload Trivy to GitHub Security
-      uses: github/codeql-action/upload-sarif@v4
+      uses: github/codeql-action/upload-sarif@v3
       if: always()
       with:
         sarif_file: 'trivy-results.sarif'
 
   deploy:
-    name: Deploy to Production
+    name: Deploy to Azure Container Apps
     runs-on: ubuntu-latest
     needs: build-secure
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
     - name: Azure Login
-      uses: azure/login@v2
+      uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
     
-    - name: Restart Container
+    - name: Deploy to Container Apps
       run: |
-        az container restart \
-          --resource-group rg-threat-modeling-poc \
-          --name threat-modeling-app
+        az containerapp update \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+    
+    - name: Get App URL
+      id: get-url
+      run: |
+        FQDN=$(az containerapp show \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.configuration.ingress.fqdn -o tsv)
+        echo "url=https://$FQDN" >> $GITHUB_OUTPUT
+    
+    - name: Post deployment comment
+      if: github.event_name == 'push'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.repos.createCommitComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha,
+            body: '🚀 Deployed to production: ${{ steps.get-url.outputs.url }}'
+          })
+
