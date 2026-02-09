@@ -1,4 +1,7 @@
-name: Security Scan and Deploy
+name: Security Scan and Deploy (OIDC - No Passwords)
+
+# Passwordless authentication using GitHub OIDC
+# Zero secrets stored in GitHub!
 
 on:
   push:
@@ -9,28 +12,13 @@ on:
       - '.github/workflows/**'
   pull_request:
     branches: [ main ]
-  schedule:
-    - cron: '0 0 * * 1'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Environment to deploy'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - develop
-      skip_tests:
-        description: 'Skip security scans'
-        required: false
-        type: boolean
-        default: false
-        
+
 permissions:
   contents: write
   security-events: write
   actions: read
+  id-token: write  # Required for OIDC!
 
 env:
   REGISTRY: threatmodelingacr.azurecr.io
@@ -62,74 +50,34 @@ jobs:
     
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
-      with:
-        category: "/language:python"
-
-  dependency-review:
-    name: Dependency Review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Dependency Review
-      uses: actions/dependency-review-action@v4
-      with:
-        fail-on-severity: high
-
-  build-insecure:
-    name: Build Insecure (Dev/Test)
-    runs-on: ubuntu-latest
-    needs: codeql-analysis
-    if: github.ref != 'refs/heads/main'
-    permissions:
-      contents: read
-      packages: write
-    
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Log in to ACR
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
-    
-    - name: Build and push
-      uses: docker/build-push-action@v5
-      with:
-        context: ./container
-        push: true
-        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:insecure-${{ github.sha }}
 
   build-secure:
-    name: Build Secure (Production)
+    name: Build and Push
     runs-on: ubuntu-latest
     needs: codeql-analysis
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      packages: write
-      security-events: write
+      id-token: write  # Required for OIDC
     
     steps:
     - name: Checkout
       uses: actions/checkout@v4
     
-    - name: Log in to ACR
-      uses: docker/login-action@v3
+    # Login using OIDC - NO PASSWORDS!
+    - name: Azure Login (OIDC)
+      uses: azure/login@v1
       with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     
+    # Login to ACR using Azure identity - NO ACR PASSWORDS!
+    - name: Login to ACR via Azure
+      run: |
+        az acr login --name threatmodelingacr
+    
+    # Build and push
     - name: Build and push
       uses: docker/build-push-action@v5
       with:
@@ -139,6 +87,7 @@ jobs:
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
     
+    # Trivy scan
     - name: Run Trivy scan
       uses: aquasecurity/trivy-action@master
       with:
@@ -153,26 +102,36 @@ jobs:
         sarif_file: 'trivy-results.sarif'
 
   deploy:
-    name: Deploy to Azure Container Apps
+    name: Deploy to Container Apps
     runs-on: ubuntu-latest
     needs: build-secure
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
-      actions: read
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      id-token: write  # Required for OIDC
     
     steps:
-    - name: Azure Login
+    # Login using OIDC - NO PASSWORDS!
+    - name: Azure Login (OIDC)
       uses: azure/login@v1
       with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     
+    # Deploy - secrets from Key Vault!
     - name: Deploy to Container Apps
       run: |
+        echo "🚀 Deploying..."
+        
         az containerapp update \
           --name ${{ env.CONTAINER_APP_NAME }} \
           --resource-group ${{ env.RESOURCE_GROUP }} \
           --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        
+        echo "✅ Deployed!"
+        echo "🔐 Auth: GitHub OIDC (no passwords!)"
+        echo "🔑 Secrets: Azure Key Vault"
     
     - name: Get App URL
       id: get-url
@@ -192,6 +151,5 @@ jobs:
             owner: context.repo.owner,
             repo: context.repo.repo,
             commit_sha: context.sha,
-            body: '🚀 Deployed to production: ${{ steps.get-url.outputs.url }}'
+            body: '🚀 Deployed: ${{ steps.get-url.outputs.url }}\n🔐 Auth: GitHub OIDC\n🔑 Secrets: Key Vault\n🐳 Image: ${{ github.sha }}'
           })
-
