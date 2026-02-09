@@ -1,6 +1,8 @@
-# AI Threat Modeling - Security Enhanced
+# AI Threat Modeling Assistant
 
-## This project borrows heavily from https://github.com/build-on-aws/threat-model-accelerator-with-genai
+Generate AI-powered security threat models using Azure OpenAI GPT-4o. Upload architecture diagrams or describe your system to get detailed threat analysis following STRIDE, PASTA, LINDDUN, and VAST frameworks with Australian compliance (AESCSF v2, Essential Eight).
+
+### This project borrows heavily from https://github.com/build-on-aws/threat-model-accelerator-with-genai
 
 ## Structure
 
@@ -29,107 +31,272 @@
 - **Dual builds**: Insecure (test) + Secure (prod)
 - **Azure Container Apps**: HTTPS enabled, auto-scaling
 
-## Setup
+## Prerequisites
 
-### 1. Deploy to Azure Container Apps
+### Azure Resources (create these first)
 
-**Initial deployment (manual):**
+1. **Azure Subscription** with access to:
+   - Azure OpenAI Service (GPT-4o model)
+   - Resource group creation rights
 
+2. **Create Azure OpenAI Service:**
+   ```bash
+   # Create resource group
+   az group create --name threat-modeling-poc --location australiaeast
+   
+   # Create Azure OpenAI
+   az cognitiveservices account create \
+     --name threat-modeling-openai \
+     --resource-group threat-modeling-poc \
+     --kind OpenAI \
+     --sku S0 \
+     --location australiaeast
+   
+   # Deploy GPT-4o model
+   az cognitiveservices account deployment create \
+     --name threat-modeling-openai \
+     --resource-group threat-modeling-poc \
+     --deployment-name gpt-4o \
+     --model-name gpt-4o \
+     --model-version "2024-05-13" \
+     --model-format OpenAI \
+     --sku-capacity 10 \
+     --sku-name "Standard"
+   
+   # Get endpoint and key
+   az cognitiveservices account show \
+     --name threat-modeling-openai \
+     --resource-group threat-modeling-poc \
+     --query properties.endpoint -o tsv
+   
+   az cognitiveservices account keys list \
+     --name threat-modeling-openai \
+     --resource-group threat-modeling-poc \
+     --query key1 -o tsv
+   ```
+
+3. **Create Azure Container Registry:**
+   ```bash
+   az acr create \
+     --name threatmodelingacr \
+     --resource-group threat-modeling-poc \
+     --sku Basic \
+     --location australiaeast
+   ```
+
+4. **Create Container Apps Environment:**
+   ```bash
+   az containerapp env create \
+     --name threat-modeling-env \
+     --resource-group threat-modeling-poc \
+     --location australiaeast
+   ```
+
+### Google OAuth (for authentication)
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Create new project (or use existing)
+3. Create **OAuth 2.0 Client ID** (Web application)
+4. Leave redirect URIs empty for now (will add after deployment)
+5. Save **Client ID** and **Client Secret**
+
+### GitHub Repository
+
+1. Fork or clone this repository
+2. Enable GitHub Advanced Security (Settings → Code security)
+
+---
+
+## Quick Setup (15 minutes)
+
+### 1. Clone Repository
 ```bash
-# Deploy Container App with OAuth
-az containerapp create \
-  --name threat-modeling \
-  --resource-group rg-threat-modeling-poc \
-  --environment threat-modeling-env \
-  --image threatmodelingacr.azurecr.io/threat-modeling:latest \
-  --registry-server threatmodelingacr.azurecr.io \
-  --target-port 8000 \
-  --ingress external \
-  --cpu 1.0 --memory 2.0Gi \
-  --set-env-vars \
-    AZURE_OPENAI_ENDPOINT="https://..." \
-    AZURE_OPENAI_DEPLOYMENT="gpt-4o" \
-    REQUIRE_AUTH="true" \
-    AUTHORIZED_EMAILS="user@company.com" \
-  --replace-env-vars \
-    AZURE_OPENAI_KEY="your-key" \
-    GOOGLE_CLIENT_SECRET="your-secret"
+git clone https://github.com/swift-mammoth/threat-modelling-poc.git
+cd threat-modelling-poc
 ```
 
-### 2. GitHub Secrets
-
-Add to repository secrets:
-
-```
-ACR_USERNAME=threatmodelingacr
-ACR_PASSWORD=[from Azure]
-AZURE_CREDENTIALS=[service principal JSON]
-```
-
-### 3. Enable GitHub Advanced Security
-
-1. Repository → Settings → Code security and analysis
-2. Enable "CodeQL analysis"
-3. Enable "Dependabot alerts"
-4. Enable "Dependabot security updates"
-
-### 4. Deploy
-
-**Test build** (any branch):
+### 2. Deploy Infrastructure
 ```bash
-git push origin develop
-# Builds insecure version for testing
+# Edit clean-setup.sh with your values
+nano clean-setup.sh
+
+# Update these lines:
+OPENAI_KEY="your-key-from-above"
+OPENAI_ENDPOINT="https://threat-modeling-openai.openai.azure.com/"
+GOOGLE_CLIENT_ID="your-google-client-id"
+GOOGLE_CLIENT_SECRET="your-google-client-secret"
+AUTHORIZED_DOMAINS="gmail.com"  # Or your company domain
+
+# Run setup
+chmod +x clean-setup.sh
+./clean-setup.sh
 ```
 
-**Production** (main branch):
+**This creates:**
+- Azure Key Vault with all secrets
+- Container App with managed identity
+- HTTPS enabled automatically
+
+**Copy the app URL from the output** - you'll need it next.
+
+### 3. Update Google OAuth
+1. Go back to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Click your OAuth client
+3. Add **Authorized redirect URIs:**
+   ```
+   https://your-app-url.azurecontainerapps.io/
+   ```
+4. Save
+
+### 4. Setup GitHub OIDC (Passwordless CI/CD)
 ```bash
+# Edit setup-github-oidc.sh
+nano setup-github-oidc.sh
+
+# Update these lines:
+GITHUB_ORG="swift-mammoth"
+GITHUB_REPO="threat-modelling-poc"
+
+# Run setup
+chmod +x setup-github-oidc.sh
+./setup-github-oidc.sh
+```
+
+**Add these 3 values to GitHub Secrets** (Settings → Secrets → Actions):
+- `AZURE_CLIENT_ID` (from script output)
+- `AZURE_TENANT_ID` (from script output)
+- `AZURE_SUBSCRIPTION_ID` (from script output)
+
+### 5. Enable Automated Deployments
+```bash
+# Use the OIDC workflow
+cp .github/workflows/security-deploy-oidc.yml .github/workflows/security-deploy.yml
+
+# Commit and push
+git add .github/workflows/security-deploy.yml
+git commit -m "Enable automated deployments"
 git push origin main
-# Builds secure version with OAuth
-# Auto-deploys to Azure Container Apps
 ```
 
-## Environment Variables
+**Done!** 🎉 Your app is live at the URL from step 2.
 
-### Insecure (Development)
-```
-AZURE_OPENAI_ENDPOINT=https://...
-AZURE_OPENAI_KEY=...
-AZURE_OPENAI_DEPLOYMENT=gpt-4o
-AZURE_OPENAI_API_VERSION=2025-01-01-preview
-```
+---
 
-### Secure (Production)
-Same as above, plus:
-```
-REQUIRE_AUTH=true
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-AUTHORIZED_EMAILS=user@company.com,user2@company.com
-APP_URL=https://your-containerapp-url.azurecontainerapps.io
-```
+## Usage
 
-## Workflow
+### Accessing the App
+Open your app URL and sign in with Google (must be from authorized domain).
 
-1. **Push to develop** → Insecure build for testing
-2. **Push to main** → Secure build → Auto-deploy to Container Apps
-3. **Weekly** → Security scans run automatically
-4. **Dependabot** → Creates PRs for updates
+### Generating Threat Models
+1. **Upload** architecture diagram (PNG/JPG) or PDF, OR
+2. **Describe** your system in the text box
+3. **Select** framework (STRIDE, PASTA, etc.)
+4. **Click** Generate
 
-## Deployment Target
-
-**Azure Container Apps** (not Container Instances)
-- Automatic HTTPS with managed certificate
-- Auto-scaling support
-- Environment variable updates without recreation
-- Cost: ~$20-30/month
-
-**GitHub Actions deploys via:**
+### Managing Users
 ```bash
-az containerapp update \
-  --name threat-modeling \
-  --resource-group rg-threat-modeling-poc \
-  --image threatmodelingacr.azurecr.io/threat-modeling:latest
+# Allow all Gmail users
+az keyvault secret set \
+  --vault-name threat-modeling-kv \
+  --name authorized-domains \
+  --value "gmail.com"
+
+# Or allow your company domain
+az keyvault secret set \
+  --vault-name threat-modeling-kv \
+  --name authorized-domains \
+  --value "yourcompany.com"
+
+# Or specific emails
+az keyvault secret set \
+  --vault-name threat-modeling-kv \
+  --name authorized-emails \
+  --value "user1@example.com,user2@example.com"
 ```
+
+Changes take effect in ~30 seconds.
+
+---
+
+## Development
+
+### Local Development
+```bash
+# Set environment variables
+export AZURE_OPENAI_ENDPOINT="https://..."
+export AZURE_OPENAI_KEY="..."
+export REQUIRE_AUTH="false"
+
+# Run
+cd container-secure
+streamlit run app.py
+```
+
+### Deploying Changes
+```bash
+# Just push to main
+git add .
+git commit -m "Your changes"
+git push origin main
+
+# GitHub Actions automatically:
+# - Scans code
+# - Builds container
+# - Deploys to Azure
+# - Updates version in UI
+```
+
+---
+
+## Troubleshooting
+
+**Can't login?**
+- Check `AUTHORIZED_DOMAINS` in Key Vault matches your email domain
+
+**OAuth error?**
+- Verify redirect URI in Google Console: `https://your-exact-url.azurecontainerapps.io/`
+
+**Container won't start?**
+```bash
+az containerapp logs show \
+  --name threat-modeling \
+  --resource-group threat-modeling-poc \
+  --follow
+```
+
+**Need to reset everything?**
+```bash
+# Delete and re-run clean-setup.sh
+az containerapp delete --name threat-modeling --resource-group threat-modeling-poc --yes
+az keyvault delete --name threat-modeling-kv --resource-group threat-modeling-poc
+az keyvault purge --name threat-modeling-kv
+./clean-setup.sh
+```
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more solutions.
+
+---
+
+## Cost
+
+Approximately **$40-90/month**:
+- Azure Container Apps: $20-30
+- Azure OpenAI: $10-50 (usage-based)
+- Azure Key Vault: $1-5
+- Azure Container Registry: $5
+
+---
+
+## Security Features
+
+- ✅ Google OAuth authentication
+- ✅ Azure Key Vault (all secrets)
+- ✅ Managed Identity (no passwords in code)
+- ✅ GitHub OIDC (no passwords in GitHub)
+- ✅ Automated security scanning (CodeQL, Trivy)
+- ✅ HTTPS with automatic certificates
+
+---
 
 ## Security Scans
 
@@ -140,23 +307,7 @@ az containerapp update \
 
 Results visible in: Repository → Security tab
 
-## Quick Start
-
-```bash
-# Local test (insecure)
-cd container
-docker build -t threat-modeling:test .
-docker run -p 8000:8000 \
-  -e AZURE_OPENAI_ENDPOINT=... \
-  -e AZURE_OPENAI_KEY=... \
-  -e AZURE_OPENAI_DEPLOYMENT=gpt-4o \
-  threat-modeling:test
-
-# Push to production
-git add .
-git commit -m "Update"
-git push origin main
-```
+---
 
 ## License
 
