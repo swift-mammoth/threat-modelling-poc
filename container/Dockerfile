@@ -6,6 +6,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /app
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libmagic1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install build dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
