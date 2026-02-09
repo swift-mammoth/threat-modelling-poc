@@ -25,7 +25,7 @@ env:
   IMAGE_NAME: threat-modeling
   RESOURCE_GROUP: threat-modeling-poc
   CONTAINER_APP_NAME: threat-modeling
-  REQUIRE_AUTH: "false"
+  REQUIRE_AUTH: false
 
 jobs:
   codeql-analysis:
