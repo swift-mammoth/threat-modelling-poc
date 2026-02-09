@@ -610,6 +610,8 @@ with tab3:
     Contact your security team or check the project documentation.
     """)
 
-# Footer
+# Footer with version
 st.markdown("---")
-st.markdown("🛡️ **AI Threat Modeling POC** | Powered by Azure OpenAI | Built with Streamlit")
+version = os.getenv("APP_VERSION", "dev")
+git_sha = os.getenv("GIT_SHA", "unknown")
+st.markdown(f"🛡️ **AI Threat Modeling POC** | Powered by Azure OpenAI | Built with Streamlit | Version: `{version}` | Commit: `{git_sha[:7]}`")
