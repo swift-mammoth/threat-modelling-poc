@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # Final stage - distroless-like slim image
 FROM python:3.11-slim
 
+# Build arguments
+ARG GIT_SHA=unknown
+ARG APP_VERSION=secure
+
 # Suppress debconf warnings
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -45,7 +49,9 @@ ENV PATH=/home/appuser/.local/bin:$PATH \
     STREAMLIT_SERVER_PORT=8000 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    GIT_SHA=${GIT_SHA} \
+    APP_VERSION=${APP_VERSION}
 
 # Switch to non-root user
 USER appuser
