@@ -38,6 +38,14 @@ COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
 # Copy application code
 COPY --chown=appuser:appuser app.py .
+COPY --chown=appuser:appuser app_main.py .
+COPY --chown=appuser:appuser prompt_protection.py .
+COPY --chown=appuser:appuser file_security.py .
+COPY --chown=appuser:appuser api.py .
+COPY --chown=appuser:appuser start.sh .
+
+# Make startup script executable
+RUN chmod +x start.sh
 
 # Set environment variables
 ENV PATH=/home/appuser/.local/bin:$PATH \
@@ -50,17 +58,19 @@ ENV PATH=/home/appuser/.local/bin:$PATH \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     GIT_SHA=${GIT_SHA} \
-    APP_VERSION=${APP_VERSION}
+    APP_VERSION=${APP_VERSION} \
+    API_ENABLED=false \
+    API_PORT=8001
 
 # Switch to non-root user
 USER appuser
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/_stcore/health')" || exit 1
 
-# Run streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=8000", "--server.address=0.0.0.0"]
+# Run startup script
+CMD ["./start.sh"]

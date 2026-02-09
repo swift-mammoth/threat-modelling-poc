@@ -6,10 +6,6 @@ name: Security Scan and Deploy (OIDC - No Passwords!)
 on:
   push:
     branches: [ main, develop ]
-    paths:
-      - 'container/**'
-      - 'container-secure/**'
-      - '.github/workflows/**'
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -85,7 +81,7 @@ jobs:
     - name: Build and push
       uses: docker/build-push-action@v5
       with:
-        context: ./container-secure
+        context: ./container
         push: true
         build-args: |
           GIT_SHA=${{ github.sha }}
@@ -134,7 +130,7 @@ jobs:
         az containerapp update \
           --name ${{ env.CONTAINER_APP_NAME }} \
           --resource-group ${{ env.RESOURCE_GROUP }} \
-          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         
         echo "✅ Deployed!"
         echo "🔐 Auth: GitHub OIDC (no passwords!)"

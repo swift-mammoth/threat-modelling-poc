@@ -14,6 +14,15 @@ from io import BytesIO
 from PIL import Image
 import PyPDF2
 
+# Import security modules
+try:
+    from prompt_protection import detect_prompt_injection, sanitize_input, validate_file_content
+    from file_security import validate_file, get_file_info
+    SECURITY_MODULES_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Security modules not available: {e}")
+    SECURITY_MODULES_AVAILABLE = False
+
 # Ensure UTF-8 encoding for stdout/stderr
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -124,6 +133,25 @@ def process_uploaded_files(uploaded_files):
     for uploaded_file in uploaded_files:
         file_type = uploaded_file.type
         file_name = uploaded_file.name
+        file_content = uploaded_file.read()
+        
+        # Security validation
+        if SECURITY_MODULES_AVAILABLE:
+            # Get file extension
+            file_ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
+            
+            # Validate file
+            is_safe, reason = validate_file(file_content, file_name, file_ext)
+            if not is_safe:
+                st.error(f"🚫 Security check failed for {file_name}: {reason}")
+                continue
+            
+            # Log file info
+            file_info = get_file_info(file_content, file_name)
+            print(f"[FILE UPLOAD] {file_info}")
+        
+        # Reset file pointer after reading
+        uploaded_file.seek(0)
         
         if file_type.startswith('image/'):
             # Process image
@@ -138,14 +166,30 @@ def process_uploaded_files(uploaded_files):
         
         elif file_type == 'application/pdf':
             # Process PDF
+            uploaded_file.seek(0)  # Reset again before PDF processing
             text = extract_text_from_pdf(uploaded_file)
             if text:
+                # Validate extracted content
+                if SECURITY_MODULES_AVAILABLE:
+                    is_safe, reason = validate_file_content(text, 'pdf')
+                    if not is_safe:
+                        st.error(f"🚫 PDF content check failed for {file_name}: {reason}")
+                        continue
+                
                 text_content.append(f"=== Content from {file_name} ===\n{text}\n")
                 st.success(f"✅ Extracted text from PDF: {file_name}")
         
         elif file_type.startswith('text/') or file_name.endswith(('.txt', '.md')):
             # Process text file
-            text = uploaded_file.read().decode('utf-8', errors='ignore')
+            text = file_content.decode('utf-8', errors='ignore')
+            
+            # Validate text content
+            if SECURITY_MODULES_AVAILABLE:
+                is_safe, reason = validate_file_content(text, file_ext)
+                if not is_safe:
+                    st.error(f"🚫 Text content check failed for {file_name}: {reason}")
+                    continue
+            
             text_content.append(f"=== Content from {file_name} ===\n{text}\n")
             st.success(f"✅ Processed text file: {file_name}")
         
@@ -157,8 +201,34 @@ def process_uploaded_files(uploaded_files):
     
     return images, text_content
 
-def generate_threat_model(architecture_description, framework="STRIDE", images=None, additional_context=""):
+def generate_threat_model(architecture_description, framework="STRIDE", images=None, additional_context="", model_deployment=None):
     """Generate threat model using Azure OpenAI with optional image analysis"""
+    
+    # Use provided model or fall back to default
+    deployment_name = model_deployment or os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+    
+    # Security: Validate inputs for prompt injection
+    if SECURITY_MODULES_AVAILABLE:
+        # Check architecture description
+        if architecture_description:
+            is_safe, reason = detect_prompt_injection(architecture_description)
+            if not is_safe:
+                st.error(f"🚫 Security check failed: {reason}")
+                st.warning("Your input contains patterns that may indicate a prompt injection attack. Please rephrase your architecture description.")
+                return None
+            
+            # Sanitize input
+            architecture_description = sanitize_input(architecture_description)
+        
+        # Check additional context
+        if additional_context:
+            is_safe, reason = detect_prompt_injection(additional_context)
+            if not is_safe:
+                st.error(f"🚫 Security check failed on uploaded content: {reason}")
+                return None
+            
+            # Sanitize
+            additional_context = sanitize_input(additional_context)
     
     # Ensure clean UTF-8 encoding
     architecture_description = architecture_description.encode('utf-8', errors='ignore').decode('utf-8')
@@ -277,7 +347,7 @@ Be specific, actionable, and prioritize based on business impact."""
             })
         
         response = client.chat.completions.create(
-            model=AZURE_OPENAI_DEPLOYMENT,
+            model=deployment_name,
             messages=messages,
             temperature=0.7,
             max_tokens=4000
@@ -340,6 +410,28 @@ with st.sidebar:
     else:
         st.success(f"✅ Using: {AZURE_OPENAI_DEPLOYMENT}")
         model_configured = True
+    
+    # Model selection for comparison
+    st.markdown("### AI Model Selection")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        primary_model = st.selectbox(
+            "Primary Model",
+            ["gpt-4o", "gpt-4", "gpt-4-turbo", "gpt-35-turbo"],
+            help="Main model for threat analysis"
+        )
+    
+    with col2:
+        compare_enabled = st.checkbox("Compare with second model", help="Generate threat models from two different models for comparison")
+        if compare_enabled:
+            secondary_model = st.selectbox(
+                "Secondary Model",
+                ["gpt-4", "gpt-4-turbo", "gpt-35-turbo", "gpt-4o"],
+                help="Second model for comparison"
+            )
+        else:
+            secondary_model = None
     
     # Framework selection
     framework = st.selectbox(
@@ -455,48 +547,142 @@ with tab1:
         
         with col1:
             generate_disabled = not model_configured or (not architecture_desc and not uploaded_files)
-            if st.button("🚀 Generate Threat Model", type="primary", disabled=generate_disabled):
-                with st.spinner(f"Analyzing architecture with {AZURE_OPENAI_DEPLOYMENT}..."):
-                    threat_model = generate_threat_model(
+            button_text = "🔄 Compare Models" if compare_enabled and secondary_model else "🚀 Generate Threat Model"
+            
+            if st.button(button_text, type="primary", disabled=generate_disabled):
+                # Generate from primary model
+                with st.spinner(f"Analyzing with {primary_model}..."):
+                    threat_model_primary = generate_threat_model(
                         architecture_desc, 
                         framework,
                         images=images,
-                        additional_context=extracted_text
+                        additional_context=extracted_text,
+                        model_deployment=primary_model
                     )
                     
-                    if threat_model:
-                        st.session_state['current_threat_model'] = threat_model
+                    if threat_model_primary:
+                        st.session_state['primary_model'] = primary_model
+                        st.session_state['current_threat_model'] = threat_model_primary
                         st.session_state['current_architecture'] = architecture_desc
                         st.session_state['uploaded_files_info'] = [f.name for f in uploaded_files] if uploaded_files else []
-                        st.success("✅ Threat model generated successfully!")
+                        
+                        # Generate from secondary model if comparison enabled
+                        if compare_enabled and secondary_model and secondary_model != primary_model:
+                            with st.spinner(f"Analyzing with {secondary_model}..."):
+                                threat_model_secondary = generate_threat_model(
+                                    architecture_desc, 
+                                    framework,
+                                    images=images,
+                                    additional_context=extracted_text,
+                                    model_deployment=secondary_model
+                                )
+                                
+                                if threat_model_secondary:
+                                    st.session_state['secondary_model'] = secondary_model
+                                    st.session_state['secondary_threat_model'] = threat_model_secondary
+                                    st.success(f"✅ Threat models generated from {primary_model} and {secondary_model}!")
+                                else:
+                                    st.warning(f"⚠️ Primary model succeeded, but {secondary_model} failed")
+                        else:
+                            # Clear secondary if it exists
+                            if 'secondary_threat_model' in st.session_state:
+                                del st.session_state['secondary_threat_model']
+                            if 'secondary_model' in st.session_state:
+                                del st.session_state['secondary_model']
+                            st.success("✅ Threat model generated successfully!")
         
         with col2:
             if st.button("🔄 Clear"):
                 architecture_desc = ""
                 uploaded_files = None
-                if 'current_threat_model' in st.session_state:
-                    del st.session_state['current_threat_model']
-                if 'uploaded_files_info' in st.session_state:
-                    del st.session_state['uploaded_files_info']
+                # Clear all session state
+                for key in ['current_threat_model', 'uploaded_files_info', 'secondary_threat_model', 'primary_model', 'secondary_model']:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 st.rerun()
     
-    # Display generated threat model
+    # Display generated threat model(s)
     if 'current_threat_model' in st.session_state:
         st.markdown("---")
         st.header("Generated Threat Model")
         
-        # Save option
-        col1, col2 = st.columns([3, 1])
-        with col2:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = st.text_input("Filename", value=f"threat_model_{timestamp}.md")
-            
-            if st.button("💾 Save to Storage"):
-                if save_threat_model(st.session_state['current_threat_model'], filename):
-                    st.success(f"Saved to Azure Storage: {filename}")
+        # Check if we have comparison results
+        has_comparison = 'secondary_threat_model' in st.session_state
         
-        # Display the threat model
-        st.markdown(st.session_state['current_threat_model'])
+        if has_comparison:
+            # Side-by-side comparison
+            st.markdown(f"### Model Comparison: {st.session_state.get('primary_model', 'Model 1')} vs {st.session_state.get('secondary_model', 'Model 2')}")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(f"#### {st.session_state.get('primary_model', 'Primary Model')}")
+                st.markdown(st.session_state['current_threat_model'])
+            
+            with col2:
+                st.markdown(f"#### {st.session_state.get('secondary_model', 'Secondary Model')}")
+                st.markdown(st.session_state['secondary_threat_model'])
+            
+            # Save options for comparison
+            st.markdown("---")
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            with col1:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = st.text_input("Filename (both models)", value=f"threat_model_comparison_{timestamp}.md")
+            
+            with col2:
+                if st.button("💾 Save Comparison"):
+                    # Combine both models
+                    combined = f"""# Threat Model Comparison
+## Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+## Framework: {framework}
+
+---
+
+# {st.session_state.get('primary_model', 'Model 1')} Analysis
+
+{st.session_state['current_threat_model']}
+
+---
+
+# {st.session_state.get('secondary_model', 'Model 2')} Analysis
+
+{st.session_state['secondary_threat_model']}
+"""
+                    if save_threat_model(combined, filename):
+                        st.success(f"Saved comparison to: {filename}")
+            
+            with col3:
+                st.download_button(
+                    "⬇️ Download",
+                    combined,
+                    file_name=filename,
+                    mime="text/markdown"
+                )
+        else:
+            # Single model display
+            # Save option
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = st.text_input("Filename", value=f"threat_model_{timestamp}.md")
+            
+            with col2:
+                if st.button("💾 Save to Storage"):
+                    if save_threat_model(st.session_state['current_threat_model'], filename):
+                        st.success(f"Saved to: {filename}")
+            
+            with col3:
+                st.download_button(
+                    "⬇️ Download",
+                    st.session_state['current_threat_model'],
+                    file_name=filename,
+                    mime="text/markdown"
+                )
+            
+            # Display the threat model
+            st.markdown(st.session_state['current_threat_model'])
         
         # Download button
         st.download_button(

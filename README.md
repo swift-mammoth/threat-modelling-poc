@@ -2,34 +2,7 @@
 
 Generate AI-powered security threat models using Azure OpenAI GPT-4o. Upload architecture diagrams or describe your system to get detailed threat analysis following STRIDE, PASTA, LINDDUN, and VAST frameworks with Australian compliance (AESCSF v2, Essential Eight).
 
-### This project borrows heavily from https://github.com/build-on-aws/threat-model-accelerator-with-genai
-
-## Structure
-
-```
-├── container/              # Insecure version (dev/test)
-│   ├── app.py
-│   ├── Dockerfile
-│   └── requirements.txt
-├── container-secure/       # Secure version (production)
-│   ├── app.py             # OAuth wrapper
-│   ├── app_main.py        # Main app logic
-│   ├── Dockerfile
-│   └── requirements.txt
-└── .github/
-    ├── workflows/
-    │   └── security-deploy.yml  # GitHub Advanced Security + Deploy
-    └── dependabot.yml           # Automated updates
-```
-
-## Features
-
-- **GitHub Advanced Security**: CodeQL analysis, Dependency Review
-- **Trivy**: Container vulnerability scanning
-- **Dependabot**: Automated dependency updates
-- **OAuth**: Google authentication (production only)
-- **Dual builds**: Insecure (test) + Secure (prod)
-- **Azure Container Apps**: HTTPS enabled, auto-scaling
+---
 
 ## Prerequisites
 
@@ -108,6 +81,8 @@ Generate AI-powered security threat models using Azure OpenAI GPT-4o. Upload arc
 ---
 
 ## Quick Setup (15 minutes)
+
+**Note:** Authentication is **optional and configurable**. You can enable/disable Google OAuth anytime by setting `REQUIRE_AUTH=true` or `REQUIRE_AUTH=false`.
 
 ### 1. Clone Repository
 ```bash
@@ -216,6 +191,26 @@ az keyvault secret set \
 
 Changes take effect in ~30 seconds.
 
+### Enable/Disable Authentication
+
+You can toggle authentication on/off anytime:
+
+```bash
+# Disable authentication (public access - use for testing/internal only)
+az containerapp update \
+  --name threat-modeling \
+  --resource-group threat-modeling-poc \
+  --set-env-vars REQUIRE_AUTH=false
+
+# Enable authentication (Google OAuth required)
+az containerapp update \
+  --name threat-modeling \
+  --resource-group threat-modeling-poc \
+  --set-env-vars REQUIRE_AUTH=true
+```
+
+**Changes take effect in ~30 seconds, no restart needed.**
+
 ---
 
 ## Development
@@ -228,7 +223,7 @@ export AZURE_OPENAI_KEY="..."
 export REQUIRE_AUTH="false"
 
 # Run
-cd container-secure
+cd container
 streamlit run app.py
 ```
 
@@ -273,12 +268,7 @@ az keyvault purge --name threat-modeling-kv
 ./clean-setup.sh
 ```
 
-**Want to enable/disable auth requirement?**
-az containerapp update \
-  --name threat-modeling \
-  --resource-group threat-modeling-poc \
-  --set-env-vars REQUIRE_AUTH=false
-```
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more solutions.
 
 ---
 
@@ -303,17 +293,20 @@ Approximately **$40-90/month**:
 
 ---
 
-## Security Scans
+## Documentation
 
-- **CodeQL**: Advanced semantic code analysis
-- **Dependency Review**: Checks PRs for vulnerable dependencies  
-- **Trivy**: Container image vulnerabilities
-- **Dependabot**: Weekly dependency updates
-
-Results visible in: Repository → Security tab
+- [DEPLOYMENT_MODES.md](DEPLOYMENT_MODES.md) - **Toggle auth on/off, enable API**
+- [API_INTEGRATION.md](API_INTEGRATION.md) - REST API examples (Teams, VS Code, etc)
+- [API_QUICKSTART.md](API_QUICKSTART.md) - 5-minute API setup
+- [SECURITY_HARDENING.md](SECURITY_HARDENING.md) - Prompt injection, file scanning, VNET
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues
+- [GITHUB_OIDC_GUIDE.md](GITHUB_OIDC_GUIDE.md) - Passwordless CI/CD details
+- [KEY_VAULT_GUIDE.md](KEY_VAULT_GUIDE.md) - Secret management
+- [VERSION_DISPLAY.md](VERSION_DISPLAY.md) - Git SHA tracking
+- [MODEL_COMPARISON.md](MODEL_COMPARISON.md) - Compare AI models
 
 ---
 
 ## License
 
-MIT
+MIT License
