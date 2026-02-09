@@ -273,7 +273,12 @@ az keyvault purge --name threat-modeling-kv
 ./clean-setup.sh
 ```
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more solutions.
+**Want to enable/disable auth requirement?**
+az containerapp update \
+  --name threat-modeling \
+  --resource-group threat-modeling-poc \
+  --set-env-vars REQUIRE_AUTH=false
+```
 
 ---
 
