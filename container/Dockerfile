@@ -1,35 +1,47 @@
-# Multi-stage build for security
+# Multi-stage build for smaller, more secure image
 FROM python:3.11-slim AS builder
 
-# Set working directory
+# Suppress debconf warnings
+ENV DEBIAN_FRONTEND=noninteractive
+
 WORKDIR /app
 
-# Install system dependencies for python-magic
-RUN apt-get update && apt-get install -y \
-    libmagic1 \
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     gcc \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Final stage - slim image
+# Final stage - distroless-like slim image
 FROM python:3.11-slim
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Build arguments
+ARG GIT_SHA=unknown
+ARG APP_VERSION=dev
+
+# Suppress debconf warnings
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install runtime dependencies (python-magic needs libmagic1)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -m -u 1000 appuser
+RUN useradd -m -u 1000 appuser && \
+    mkdir -p /app && \
+    chown -R appuser:appuser /app
 
-# Set working directory
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /root/.local /home/appuser/.local
+# Copy Python dependencies from builder
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
 # Copy application code
 COPY --chown=appuser:appuser app.py .
@@ -41,10 +53,6 @@ COPY --chown=appuser:appuser start.sh .
 
 # Make startup script executable
 RUN chmod +x start.sh
-
-# Build arguments for versioning
-ARG GIT_SHA=unknown
-ARG APP_VERSION=dev
 
 # Set environment variables
 ENV PATH=/home/appuser/.local/bin:$PATH \
@@ -68,8 +76,8 @@ USER appuser
 EXPOSE 8000 8001
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/_stcore/health')"
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/_stcore/health')" || exit 1
 
 # Run startup script
 CMD ["./start.sh"]
