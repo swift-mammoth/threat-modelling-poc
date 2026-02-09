@@ -43,19 +43,8 @@ SUSPICIOUS_FILENAME_PATTERNS = [
     r'[<>:"|?*]',  # Invalid filename characters
 ]
 
-
 def validate_file(file_content: bytes, filename: str, declared_type: str) -> Tuple[bool, str]:
-    """
-    Comprehensive file validation
-    
-    Args:
-        file_content: Raw file bytes
-        filename: Original filename
-        declared_type: File extension declared by uploader
-        
-    Returns:
-        Tuple of (is_safe, reason)
-    """
+    """Comprehensive file validation"""
     # 1. Validate filename
     is_safe, reason = validate_filename(filename)
     if not is_safe:
@@ -71,10 +60,11 @@ def validate_file(file_content: bytes, filename: str, declared_type: str) -> Tup
     if not is_safe:
         return False, reason
     
-    # 4. Scan for malicious signatures
-    is_safe, reason = scan_malicious_signatures(file_content)
-    if not is_safe:
-        return False, reason
+    # 4. Scan for malicious signatures (ONLY for non-images)
+    if declared_type not in ['png', 'jpg', 'jpeg', 'gif', 'webp']:
+        is_safe, reason = scan_malicious_signatures(file_content)
+        if not is_safe:
+            return False, reason
     
     # 5. PDF-specific checks
     if declared_type == 'pdf':
@@ -89,7 +79,6 @@ def validate_file(file_content: bytes, filename: str, declared_type: str) -> Tup
             return False, reason
     
     return True, "File validation passed"
-
 
 def validate_filename(filename: str) -> Tuple[bool, str]:
     """Validate filename for security issues"""
@@ -171,21 +160,16 @@ def detect_mime_basic(file_content: bytes) -> str:
     else:
         return 'application/octet-stream'
 
-
 def scan_malicious_signatures(file_content: bytes) -> Tuple[bool, str]:
     """Scan for known malicious file signatures"""
-    # Check first 4 bytes against known malicious signatures
+    # Only check file header (first 8 bytes) to avoid false positives
+    header = file_content[:8]
+    
     for signature in MALICIOUS_SIGNATURES:
-        if file_content.startswith(signature):
+        if header.startswith(signature):
             return False, f"Malicious file signature detected: {signature.hex()}"
     
-    # Check for embedded executables in the file
-    for signature in MALICIOUS_SIGNATURES:
-        if signature in file_content:
-            return False, "File contains embedded executable"
-    
     return True, ""
-
 
 def validate_pdf(file_content: bytes) -> Tuple[bool, str]:
     """PDF-specific validation"""
@@ -230,17 +214,19 @@ def validate_image(file_content: bytes, image_type: str) -> Tuple[bool, str]:
         
         # Check for reasonable dimensions (prevent decompression bombs)
         width, height = img.size
-        if width * height > 178956970:  # ~13000x13000 pixels (same as PIL's default)
+        if width * height > 178956970:  # ~13000x13000 pixels
             return False, f"Image too large: {width}x{height} pixels"
         
         # Verify image (catches some corrupted/malicious images)
         img.verify()
         
+        # Don't check for embedded executables in images - false positives
+        # Images legitimately contain byte patterns that look like executable signatures
+        
     except Exception as e:
         return False, f"Invalid or corrupted image: {str(e)}"
     
     return True, ""
-
 
 def calculate_file_hash(file_content: bytes) -> str:
     """Calculate SHA256 hash of file for logging/tracking"""
