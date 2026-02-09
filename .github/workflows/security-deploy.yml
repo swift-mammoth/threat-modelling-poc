@@ -1,4 +1,4 @@
-name: Security Scan and Deploy (OIDC - No Passwords)
+name: Security Scan and Deploy (OIDC - No Passwords!)
 
 # Passwordless authentication using GitHub OIDC
 # Zero secrets stored in GitHub!
@@ -50,6 +50,8 @@ jobs:
     
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:python"
 
   build-secure:
     name: Build and Push
@@ -58,9 +60,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      security-events: write  # ← Added for Trivy upload
-      actions: read          # ← Added for SARIF upload 
-      id-token: write  # Required for OIDC
+      security-events: write  # Required for Trivy upload
+      actions: read          # Required for SARIF upload
+      id-token: write        # Required for OIDC
     
     steps:
     - name: Checkout
@@ -85,6 +87,9 @@ jobs:
       with:
         context: ./container-secure
         push: true
+        build-args: |
+          GIT_SHA=${{ github.sha }}
+          APP_VERSION=${{ github.ref_name }}
         tags: |
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
