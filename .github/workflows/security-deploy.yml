@@ -58,6 +58,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
+      security-events: write  # ← Added for Trivy upload
+      actions: read          # ← Added for SARIF upload 
       id-token: write  # Required for OIDC
     
     steps:
