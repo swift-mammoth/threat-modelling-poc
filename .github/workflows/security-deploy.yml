@@ -135,7 +135,7 @@ jobs:
         az containerapp update \
           --name ${{ env.CONTAINER_APP_NAME }} \
           --resource-group ${{ env.RESOURCE_GROUP }} \
-          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
           --set-env-vars REQUIRE_AUTH={{ env.REQUIRE_AUTH }}
         
         echo "✅ Deployed!"
