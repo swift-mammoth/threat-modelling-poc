@@ -25,7 +25,6 @@ env:
   IMAGE_NAME: threat-modeling
   RESOURCE_GROUP: threat-modeling-poc
   CONTAINER_APP_NAME: threat-modeling
-  REQUIRE_AUTH: false
 
 jobs:
   codeql-analysis:
@@ -136,7 +135,6 @@ jobs:
           --name ${{ env.CONTAINER_APP_NAME }} \
           --resource-group ${{ env.RESOURCE_GROUP }} \
           --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          --set-env-vars REQUIRE_AUTH={{ env.REQUIRE_AUTH }}
         
         echo "✅ Deployed!"
         echo "🔐 Auth: GitHub OIDC (no passwords!)"
