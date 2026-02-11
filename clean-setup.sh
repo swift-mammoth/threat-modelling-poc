@@ -9,6 +9,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}🛡️  Threat Modeling Application Setup${NC}"
+echo -e "${BLUE}   (Azure Cloud Shell Compatible)${NC}"
 echo "=============================================="
 echo ""
 
@@ -45,11 +46,11 @@ echo "   - Use when: Starting fresh or fixing major issues"
 echo ""
 echo "2) 🔄 Update Deployment (Keep existing config, update container)"
 echo "   - Keeps Key Vault and secrets"
-echo "   - Updates container image only"
+echo "   - Builds and updates container image"
 echo "   - Use when: Deploying new code changes"
 echo ""
-echo "3) 🐳 Build & Push Only (Update container image without deployment)"
-echo "   - Builds and pushes new container image"
+echo "3) 🐳 Build & Push Only (Build container without deployment)"
+echo "   - Builds and pushes new container image using ACR Tasks"
 echo "   - Doesn't update Container App"
 echo "   - Use when: Preparing for CI/CD deployment"
 echo ""
@@ -91,12 +92,12 @@ if [ "$CONFIRM" != "yes" ]; then
 fi
 
 # ============================================
-# BUILD & PUSH CONTAINER IMAGE
+# BUILD & PUSH CONTAINER IMAGE (ACR Tasks)
 # ============================================
 
 if [ "$INSTALL_MODE" != "clean" ]; then
     echo ""
-    echo -e "${BLUE}🐳 Building and pushing container image...${NC}"
+    echo -e "${BLUE}🐳 Building container image using Azure Container Registry Tasks...${NC}"
     
     # Get Git SHA and build date
     GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "local")
@@ -116,32 +117,45 @@ if [ "$INSTALL_MODE" != "clean" ]; then
         exit 1
     fi
     
-    # Build the image
-    echo "Building container image..."
-    docker build \
+    # Create a temporary build context archive
+    echo "Creating build context..."
+    TEMP_DIR=$(mktemp -d)
+    tar -czf "${TEMP_DIR}/build-context.tar.gz" \
+        -C ./container \
+        --exclude='.git' \
+        --exclude='__pycache__' \
+        --exclude='*.pyc' \
+        .
+    
+    echo -e "${GREEN}✓ Build context created${NC}"
+    
+    # Build using ACR Tasks (no Docker daemon needed!)
+    echo "Building image with ACR Tasks..."
+    echo "This may take 3-5 minutes..."
+    
+    az acr build \
+        --registry $ACR_NAME \
+        --image "${IMAGE_NAME}:${IMAGE_TAG}" \
+        --image "${IMAGE_NAME}:latest" \
+        --file ./container/Dockerfile \
         --build-arg GIT_SHA="$GIT_SHA" \
         --build-arg APP_VERSION="$IMAGE_TAG" \
         --build-arg BUILD_DATE="$BUILD_DATE" \
-        -t "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}" \
-        -t "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest" \
-        ./container
+        ./container/
     
-    echo -e "${GREEN}✓ Container image built${NC}"
+    BUILD_STATUS=$?
     
-    # Login to ACR
-    echo "Logging into Azure Container Registry..."
-    az acr login --name $ACR_NAME
+    # Cleanup
+    rm -rf "${TEMP_DIR}"
     
-    echo -e "${GREEN}✓ Logged into ACR${NC}"
-    
-    # Push the image
-    echo "Pushing image to ACR..."
-    docker push "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
-    docker push "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
-    
-    echo -e "${GREEN}✓ Image pushed to ACR${NC}"
-    echo "  Image: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
-    echo "  Latest: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+    if [ $BUILD_STATUS -eq 0 ]; then
+        echo -e "${GREEN}✓ Container image built and pushed to ACR${NC}"
+        echo "  Image: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
+        echo "  Latest: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+    else
+        echo -e "${RED}✗ Build failed${NC}"
+        exit 1
+    fi
     
     # Store the image reference for deployment
     DEPLOYMENT_IMAGE="${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
@@ -233,12 +247,49 @@ if [ "$INSTALL_MODE" = "clean" ]; then
     az keyvault secret set --vault-name $KV_NAME --name authorized-domains --value "$AUTHORIZED_DOMAINS" > /dev/null
     echo -e "${GREEN}✓ Authorization settings stored${NC}"
     
-    # ACR Credentials (for initial setup, though we'll use managed identity)
-    ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
-    ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
-    az keyvault secret set --vault-name $KV_NAME --name acr-username --value "$ACR_USERNAME" > /dev/null
-    az keyvault secret set --vault-name $KV_NAME --name acr-password --value "$ACR_PASSWORD" > /dev/null
-    echo -e "${GREEN}✓ ACR credentials stored${NC}"
+    # ACR Credentials (for reference, though we'll use managed identity)
+    ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv 2>/dev/null || echo "")
+    ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv 2>/dev/null || echo "")
+    if [ ! -z "$ACR_USERNAME" ]; then
+        az keyvault secret set --vault-name $KV_NAME --name acr-username --value "$ACR_USERNAME" > /dev/null
+        az keyvault secret set --vault-name $KV_NAME --name acr-password --value "$ACR_PASSWORD" > /dev/null
+        echo -e "${GREEN}✓ ACR credentials stored${NC}"
+    fi
+    
+    # ============================================
+    # Build Initial Image (if not exists)
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🐳 Checking for container image...${NC}"
+    
+    # Check if image exists in ACR
+    IMAGE_EXISTS=$(az acr repository show \
+        --name $ACR_NAME \
+        --repository $IMAGE_NAME \
+        --query "name" -o tsv 2>/dev/null || echo "")
+    
+    if [ -z "$IMAGE_EXISTS" ]; then
+        echo "Image not found in ACR. Building initial image..."
+        
+        GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "initial")
+        BUILD_DATE=$(date -u +"%Y%m%d-%H%M%S")
+        
+        az acr build \
+            --registry $ACR_NAME \
+            --image "${IMAGE_NAME}:latest" \
+            --image "${IMAGE_NAME}:initial" \
+            --file ./container/Dockerfile \
+            --build-arg GIT_SHA="$GIT_SHA" \
+            --build-arg APP_VERSION="initial" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            ./container/
+        
+        echo -e "${GREEN}✓ Initial image built${NC}"
+        DEPLOYMENT_IMAGE="${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+    else
+        echo -e "${GREEN}✓ Image exists in ACR${NC}"
+    fi
     
     # ============================================
     # Create Container App with Managed Identity
@@ -342,7 +393,44 @@ APP_URL="https://$FQDN"
 
 # Get Git SHA for version tracking
 GIT_SHA_FULL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_SHA_SHORT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Generate API key if not already set
+if [ "$INSTALL_MODE" = "clean" ] || [ "$INSTALL_MODE" = "update" ]; then
+    # Check if API key exists in Key Vault
+    API_KEY_EXISTS=$(az keyvault secret show \
+        --vault-name $KV_NAME \
+        --name api-key \
+        --query value -o tsv 2>/dev/null || echo "")
+    
+    if [ -z "$API_KEY_EXISTS" ]; then
+        echo "Generating API key..."
+        # Try openssl first, fallback to /dev/urandom
+        API_KEY=$(openssl rand -hex 32 2>/dev/null || cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1)
+        
+        # Store in Key Vault
+        az keyvault secret set \
+            --vault-name $KV_NAME \
+            --name api-key \
+            --value "$API_KEY" > /dev/null
+        
+        echo -e "${GREEN}✓ API key generated and stored in Key Vault${NC}"
+        echo -e "${YELLOW}API Key: $API_KEY${NC}"
+        echo -e "${RED}IMPORTANT: Save this key! You won't see it again.${NC}"
+        
+        # Add to secrets
+        az containerapp secret set \
+            --name $CONTAINER_APP \
+            --resource-group $RESOURCE_GROUP \
+            --secrets \
+                api-key="keyvaultref:https://${KV_NAME}.vault.azure.net/secrets/api-key,identityref:system"
+        
+        echo -e "${GREEN}✓ API key secret configured${NC}"
+    else
+        echo -e "${GREEN}✓ Using existing API key from Key Vault${NC}"
+    fi
+fi
 
 # Update container with new image and environment variables
 echo "Updating container app with new image and configuration..."
@@ -360,7 +448,11 @@ az containerapp update \
     GOOGLE_CLIENT_ID=secretref:google-client-id \
     GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
     AUTHORIZED_DOMAINS=secretref:authorized-domains \
-    APP_VERSION="$IMAGE_TAG" \
+    API_ENABLED="false" \
+    API_KEY=secretref:api-key \
+    API_PORT="8000" \
+    API_RATE_LIMIT="100" \
+    APP_VERSION="${IMAGE_TAG:-latest}" \
     GIT_SHA="$GIT_SHA_FULL" \
     BUILD_DATE="$BUILD_DATE"
 
@@ -368,19 +460,25 @@ echo -e "${GREEN}✓ Container App updated${NC}"
 
 # Force a restart to ensure new container is running
 echo "Restarting container to ensure new image is loaded..."
-az containerapp revision restart \
+CURRENT_REVISION=$(az containerapp revision list \
   --name $CONTAINER_APP \
   --resource-group $RESOURCE_GROUP \
-  --revision $(az containerapp revision list \
-    --name $CONTAINER_APP \
-    --resource-group $RESOURCE_GROUP \
-    --query "[0].name" -o tsv)
+  --query "[?properties.active==\`true\`].name | [0]" -o tsv)
 
-echo -e "${GREEN}✓ Container restarted${NC}"
+if [ ! -z "$CURRENT_REVISION" ]; then
+    az containerapp revision restart \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --revision $CURRENT_REVISION
+    
+    echo -e "${GREEN}✓ Container restarted${NC}"
+else
+    echo -e "${YELLOW}⚠️  Could not find active revision to restart${NC}"
+fi
 
 # Wait for the app to be ready
 echo "Waiting for application to be ready..."
-sleep 15
+sleep 20
 
 # ============================================
 # Verification
@@ -390,24 +488,30 @@ echo ""
 echo -e "${BLUE}🔍 Verifying deployment...${NC}"
 
 # Check if container is running
-REPLICA_COUNT=$(az containerapp revision list \
+REPLICA_COUNT=$(az containerapp replica list \
   --name $CONTAINER_APP \
   --resource-group $RESOURCE_GROUP \
-  --query "[?properties.active==\`true\`] | length(@)" -o tsv)
+  --revision $CURRENT_REVISION \
+  --query "length([?properties.runningState=='Running'])" -o tsv 2>/dev/null || echo "0")
 
 if [ "$REPLICA_COUNT" -gt 0 ]; then
     echo -e "${GREEN}✓ Container is running ($REPLICA_COUNT replica(s))${NC}"
 else
-    echo -e "${RED}⚠️  Warning: No active replicas found${NC}"
+    echo -e "${RED}⚠️  Warning: No running replicas found${NC}"
+    echo "Checking recent logs..."
+    az containerapp logs show \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --tail 20 2>/dev/null || true
 fi
 
-# Get the current revision
-CURRENT_REVISION=$(az containerapp revision list \
+# Get the current revision and image
+CURRENT_IMAGE=$(az containerapp show \
   --name $CONTAINER_APP \
   --resource-group $RESOURCE_GROUP \
-  --query "[?properties.active==\`true\`].name | [0]" -o tsv)
+  --query "properties.template.containers[0].image" -o tsv)
 
-echo "Active revision: $CURRENT_REVISION"
+echo "Current image: $CURRENT_IMAGE"
 
 # ============================================
 # Summary
@@ -422,6 +526,7 @@ echo "   Mode: $INSTALL_MODE"
 echo "   Key Vault: $KV_NAME"
 echo "   Container App: $CONTAINER_APP"
 echo "   Image: $DEPLOYMENT_IMAGE"
+echo "   Current Image: $CURRENT_IMAGE"
 echo "   Active Revision: $CURRENT_REVISION"
 echo "   App URL: $APP_URL"
 echo ""
@@ -432,8 +537,10 @@ echo "   ✅ All secrets in Key Vault"
 echo "   ✅ Key Vault access granted"
 if [ "$INSTALL_MODE" = "clean" ]; then
     echo "   ⚠️  OAuth authentication: DISABLED (REQUIRE_AUTH=false)"
+    echo "   ⚠️  API: DISABLED (API_ENABLED=false)"
 else
     echo "   ℹ️  OAuth authentication unchanged"
+    echo "   ℹ️  API status unchanged"
 fi
 echo ""
 echo -e "${BLUE}🌐 Access your app:${NC}"
@@ -467,6 +574,12 @@ echo "  az containerapp revision list --name $CONTAINER_APP --resource-group $RE
 echo ""
 echo "Enable authentication:"
 echo "  az containerapp update --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --set-env-vars REQUIRE_AUTH=true"
+echo ""
+echo "Enable API:"
+echo "  az containerapp update --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --set-env-vars API_ENABLED=true"
+echo ""
+echo "Get API key:"
+echo "  az keyvault secret show --vault-name $KV_NAME --name api-key --query value -o tsv"
 echo ""
 echo -e "${GREEN}🎉 Your application is ready!${NC}"
 echo ""

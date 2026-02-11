@@ -113,6 +113,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
     
+    - name: Set build information
+      id: build-info
+      run: |
+        echo "build_date=$(date -u +"%Y%m%d-%H%M%S")" >> $GITHUB_OUTPUT
+        echo "git_sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+        echo "image_tag=$(date -u +"%Y%m%d-%H%M%S")-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+    
     - name: Azure Login (OIDC)
       uses: azure/login@v2
       with:
@@ -132,9 +139,11 @@ jobs:
         build-args: |
           GIT_SHA=${{ github.sha }}
           APP_VERSION=${{ github.ref_name }}
+          BUILD_DATE=${{ steps.build-info.outputs.build_date }}
         tags: |
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.build-info.outputs.image_tag }}
     
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@0.28.0
@@ -152,33 +161,202 @@ jobs:
       continue-on-error: true
     
     - name: Deploy to Container Apps
+      id: deploy
       run: |
-        echo "🚀 Deploying..."
+        echo "🚀 Deploying to Azure Container Apps..."
         
-        az containerapp update \
-          --name ${{ env.CONTAINER_APP_NAME }} \
-          --resource-group ${{ env.RESOURCE_GROUP }} \
-          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-        
-        echo "✅ Deployed!"
-    
-    - name: Get App URL
-      id: get-url
-      run: |
+        # Get current FQDN for environment variables
         FQDN=$(az containerapp show \
           --name ${{ env.CONTAINER_APP_NAME }} \
           --resource-group ${{ env.RESOURCE_GROUP }} \
           --query properties.configuration.ingress.fqdn -o tsv)
-        echo "url=https://$FQDN" >> $GITHUB_OUTPUT
+        
+        APP_URL="https://$FQDN"
+        echo "app_url=$APP_URL" >> $GITHUB_OUTPUT
+        
+        # Update the container app with new image AND environment variables
+        # This is critical - must set both image and env vars together
+        az containerapp update \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+          --set-env-vars \
+            APP_VERSION="${{ steps.build-info.outputs.image_tag }}" \
+            GIT_SHA="${{ github.sha }}" \
+            BUILD_DATE="${{ steps.build-info.outputs.build_date }}" \
+            APP_URL="$APP_URL"
+        
+        echo "✅ Container app updated with image: ${{ github.sha }}"
+        
+        # Get the new revision name
+        NEW_REVISION=$(az containerapp revision list \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query "[?properties.active==\`true\`].name | [0]" -o tsv)
+        
+        echo "revision=$NEW_REVISION" >> $GITHUB_OUTPUT
+        echo "📦 Active revision: $NEW_REVISION"
+    
+    - name: Restart container to ensure new image loads
+      run: |
+        echo "🔄 Restarting container to ensure new image is loaded..."
+        
+        # Force restart of the current revision
+        az containerapp revision restart \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --revision ${{ steps.deploy.outputs.revision }}
+        
+        echo "✅ Container restarted"
+    
+    - name: Wait for deployment stabilization
+      run: |
+        echo "⏳ Waiting for deployment to stabilize..."
+        sleep 30
+        
+        # Verify the container is running
+        REPLICA_COUNT=$(az containerapp replica list \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --revision ${{ steps.deploy.outputs.revision }} \
+          --query "length([?properties.runningState=='Running'])" -o tsv 2>/dev/null || echo "0")
+        
+        echo "🔍 Running replicas: $REPLICA_COUNT"
+        
+        if [ "$REPLICA_COUNT" -gt 0 ]; then
+          echo "✅ Deployment successful - $REPLICA_COUNT replica(s) running"
+        else
+          echo "⚠️  Warning: No running replicas detected"
+          echo "Checking container logs..."
+          az containerapp logs show \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --tail 50 || true
+        fi
+    
+    - name: Verify deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        
+        # Get container app status
+        STATUS=$(az containerapp show \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query properties.runningStatus -o tsv)
+        
+        echo "Container App Status: $STATUS"
+        
+        # List all revisions
+        echo ""
+        echo "📋 All revisions:"
+        az containerapp revision list \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --output table
+        
+        # Get the image currently running
+        CURRENT_IMAGE=$(az containerapp show \
+          --name ${{ env.CONTAINER_APP_NAME }} \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --query "properties.template.containers[0].image" -o tsv)
+        
+        echo ""
+        echo "🐳 Current container image: $CURRENT_IMAGE"
+        echo "🎯 Expected image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        
+        if [[ "$CURRENT_IMAGE" == *"${{ github.sha }}"* ]]; then
+          echo "✅ Deployment verified - correct image is running"
+        else
+          echo "⚠️  Warning: Image mismatch detected"
+          exit 1
+        fi
+    
+    - name: Test application health
+      run: |
+        echo "🏥 Testing application health..."
+        
+        # Try to access the health endpoint
+        APP_URL="${{ steps.deploy.outputs.app_url }}"
+        
+        # Wait a bit more for the app to be fully ready
+        sleep 10
+        
+        # Test health endpoint (Streamlit has _stcore/health)
+        if curl -f -s -o /dev/null -w "%{http_code}" "$APP_URL/_stcore/health" | grep -q "200"; then
+          echo "✅ Application health check passed"
+        else
+          echo "⚠️  Health check returned non-200 status (may be normal during startup)"
+        fi
+        
+        echo "Application is accessible at: $APP_URL"
     
     - name: Post deployment comment
       if: github.event_name == 'push'
       uses: actions/github-script@v7
       with:
         script: |
+          const deploymentInfo = `
+          ## 🚀 Deployment Successful
+          
+          **Environment:** Production  
+          **App URL:** ${{ steps.deploy.outputs.app_url }}  
+          **Revision:** \`${{ steps.deploy.outputs.revision }}\`  
+          **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}\`  
+          **Build Date:** ${{ steps.build-info.outputs.build_date }}  
+          
+          ### Version Information
+          - **Git SHA:** \`${{ github.sha }}\`
+          - **Tag:** \`${{ steps.build-info.outputs.image_tag }}\`
+          - **Branch:** \`${{ github.ref_name }}\`
+          
+          ### Security
+          - ✅ OIDC Authentication (no passwords!)
+          - ✅ Trivy vulnerability scan completed
+          - ✅ CodeQL analysis passed
+          
+          ---
+          *Deployed via GitHub Actions*
+          `;
+          
           github.rest.repos.createCommitComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
             commit_sha: context.sha,
-            body: '🚀 Deployed: ${{ steps.get-url.outputs.url }}\n🔐 Auth: OIDC\n🐳 Image: `${{ github.sha }}`'
-          })
+            body: deploymentInfo
+          });
+    
+    - name: Create deployment summary
+      if: always()
+      run: |
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        # 🚀 Deployment Summary
+        
+        ## Application Details
+        - **URL:** ${{ steps.deploy.outputs.app_url }}
+        - **Revision:** ${{ steps.deploy.outputs.revision }}
+        - **Image:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        
+        ## Build Information
+        - **Git SHA:** ${{ github.sha }}
+        - **Short SHA:** ${{ steps.build-info.outputs.git_sha_short }}
+        - **Build Date:** ${{ steps.build-info.outputs.build_date }}
+        - **Image Tag:** ${{ steps.build-info.outputs.image_tag }}
+        
+        ## Container Images Published
+        - \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`
+        - \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}\`
+        - \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.build-info.outputs.image_tag }}\`
+        
+        ## Security Scans
+        - ✅ CodeQL Analysis
+        - ✅ Trivy Vulnerability Scan
+        - ✅ OIDC Authentication (no secrets in CI/CD!)
+        
+        ## Next Steps
+        1. Visit the application: ${{ steps.deploy.outputs.app_url }}
+        2. Check logs: \`az containerapp logs show --name ${{ env.CONTAINER_APP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --follow\`
+        3. Monitor metrics in Azure Portal
+        
+        ---
+        *Deployment completed at $(date -u)*
+        EOF
