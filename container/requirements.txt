@@ -1,8 +1,4 @@
-streamlit==1.31.0
-azure-identity>=1.15.0
 azure-storage-blob>=12.19.0
-openai>=1.30.0
-requests>=2.31.0
 Pillow>=10.0.0
 PyPDF2>=3.0.0
 python-magic>=0.4.27
@@ -11,3 +7,35 @@ uvicorn[standard]>=0.27.0
 pydantic>=2.5.0
 PyJWT>=2.8.0
 python-multipart>=0.0.6
+
+# Core Dependencies
+streamlit>=1.31.0
+python-dotenv>=1.0.0
+
+# Azure and AI
+azure-identity>=1.15.0
+azure-keyvault-secrets>=4.7.0
+openai>=1.30.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Image Processing
+Pillow>=10.0.0
+pdf2image>=1.16.0
+
+# PDF Processing
+PyPDF2>=3.0.0
+pdfplumber>=0.10.0
+
+# Authentication
+requests>=2.31.0
+urllib3>=2.0.0
+
+# XML Processing (for draw.io diagrams)
+lxml>=5.1.0
+
+# Utilities
+python-dateutil>=2.8.2
+pytz>=2024.1
