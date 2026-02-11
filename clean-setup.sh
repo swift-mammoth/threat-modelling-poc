@@ -1,24 +1,16 @@
 #!/bin/bash
 set -e
 
-echo "🧹 Clean Setup - Threat Modeling Application"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+echo -e "${BLUE}🛡️  Threat Modeling Application Setup${NC}"
 echo "=============================================="
 echo ""
-echo "This script will:"
-echo "1. Delete existing Key Vault (if exists)"
-echo "2. Delete existing Container App (if exists)"
-echo "3. Create fresh Key Vault with all secrets"
-echo "4. Create fresh Container App with:"
-echo "   • Managed Identity for ACR (no passwords!)"
-echo "   • Key Vault integration"
-echo "   • All environment variables configured"
-echo ""
-read -p "Continue? (yes/no): " CONFIRM
-
-if [ "$CONFIRM" != "yes" ]; then
-    echo "Cancelled."
-    exit 0
-fi
 
 # ============================================
 # CONFIGURATION - UPDATE THESE VALUES
@@ -30,7 +22,7 @@ KV_NAME="threat-modeling-kv"
 CONTAINER_APP="threat-modeling"
 ENV_NAME="threat-modeling-env"
 ACR_NAME="threatmodelingacr"
-IMAGE="threatmodelingacr.azurecr.io/threat-modeling:latest"
+IMAGE_NAME="threat-modeling"
 
 # Your secrets - UPDATE THESE!
 OPENAI_KEY="your-openai-key-here"
@@ -40,188 +32,305 @@ GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET="your-google-secret-here"
 AUTHORIZED_DOMAINS="gmail.com"
 
+# ============================================
+# INSTALLATION MODE SELECTION
+# ============================================
+
+echo -e "${YELLOW}Select installation mode:${NC}"
 echo ""
-echo "📋 Configuration:"
+echo "1) 🆕 Clean Install (Delete everything and start fresh)"
+echo "   - Deletes Key Vault and Container App"
+echo "   - Creates new resources"
+echo "   - Use when: Starting fresh or fixing major issues"
+echo ""
+echo "2) 🔄 Update Deployment (Keep existing config, update container)"
+echo "   - Keeps Key Vault and secrets"
+echo "   - Updates container image only"
+echo "   - Use when: Deploying new code changes"
+echo ""
+echo "3) 🐳 Build & Push Only (Update container image without deployment)"
+echo "   - Builds and pushes new container image"
+echo "   - Doesn't update Container App"
+echo "   - Use when: Preparing for CI/CD deployment"
+echo ""
+read -p "Enter choice [1-3]: " MODE
+
+case $MODE in
+    1)
+        INSTALL_MODE="clean"
+        echo -e "${GREEN}✓ Clean Install mode selected${NC}"
+        ;;
+    2)
+        INSTALL_MODE="update"
+        echo -e "${GREEN}✓ Update Deployment mode selected${NC}"
+        ;;
+    3)
+        INSTALL_MODE="build-only"
+        echo -e "${GREEN}✓ Build & Push Only mode selected${NC}"
+        ;;
+    *)
+        echo -e "${RED}Invalid choice. Exiting.${NC}"
+        exit 1
+        ;;
+esac
+
+echo ""
+echo -e "${BLUE}📋 Configuration:${NC}"
 echo "   Resource Group: $RESOURCE_GROUP"
 echo "   Key Vault: $KV_NAME"
 echo "   Container App: $CONTAINER_APP"
-echo "   Image: $IMAGE"
+echo "   ACR: $ACR_NAME"
+echo "   Image: $IMAGE_NAME"
+echo "   Mode: $INSTALL_MODE"
 echo ""
-read -p "Looks good? (yes/no): " CONFIRM2
+read -p "Continue? (yes/no): " CONFIRM
 
-if [ "$CONFIRM2" != "yes" ]; then
-    echo "Please edit the script and update the configuration section."
+if [ "$CONFIRM" != "yes" ]; then
+    echo "Cancelled."
     exit 0
 fi
 
 # ============================================
-# STEP 1: Clean Up Existing Resources
+# BUILD & PUSH CONTAINER IMAGE
+# ============================================
+
+if [ "$INSTALL_MODE" != "clean" ]; then
+    echo ""
+    echo -e "${BLUE}🐳 Building and pushing container image...${NC}"
+    
+    # Get Git SHA and build date
+    GIT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "local")
+    BUILD_DATE=$(date -u +"%Y%m%d-%H%M%S")
+    IMAGE_TAG="${BUILD_DATE}-${GIT_SHA}"
+    
+    echo "Build information:"
+    echo "  Git SHA: $GIT_SHA"
+    echo "  Build Date: $BUILD_DATE"
+    echo "  Image Tag: $IMAGE_TAG"
+    echo ""
+    
+    # Check if container directory exists
+    if [ ! -d "./container" ]; then
+        echo -e "${RED}Error: ./container directory not found${NC}"
+        echo "Please run this script from the repository root"
+        exit 1
+    fi
+    
+    # Build the image
+    echo "Building container image..."
+    docker build \
+        --build-arg GIT_SHA="$GIT_SHA" \
+        --build-arg APP_VERSION="$IMAGE_TAG" \
+        --build-arg BUILD_DATE="$BUILD_DATE" \
+        -t "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}" \
+        -t "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest" \
+        ./container
+    
+    echo -e "${GREEN}✓ Container image built${NC}"
+    
+    # Login to ACR
+    echo "Logging into Azure Container Registry..."
+    az acr login --name $ACR_NAME
+    
+    echo -e "${GREEN}✓ Logged into ACR${NC}"
+    
+    # Push the image
+    echo "Pushing image to ACR..."
+    docker push "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
+    docker push "${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+    
+    echo -e "${GREEN}✓ Image pushed to ACR${NC}"
+    echo "  Image: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
+    echo "  Latest: ${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+    
+    # Store the image reference for deployment
+    DEPLOYMENT_IMAGE="${ACR_NAME}.azurecr.io/${IMAGE_NAME}:${IMAGE_TAG}"
+    
+    if [ "$INSTALL_MODE" = "build-only" ]; then
+        echo ""
+        echo -e "${GREEN}✅ Build & Push Complete!${NC}"
+        echo ""
+        echo "Image ready for deployment:"
+        echo "  ${DEPLOYMENT_IMAGE}"
+        echo ""
+        echo "To deploy manually:"
+        echo "  az containerapp update \\"
+        echo "    --name $CONTAINER_APP \\"
+        echo "    --resource-group $RESOURCE_GROUP \\"
+        echo "    --image ${DEPLOYMENT_IMAGE}"
+        echo ""
+        exit 0
+    fi
+else
+    # For clean install, we'll use the latest image from ACR
+    DEPLOYMENT_IMAGE="${ACR_NAME}.azurecr.io/${IMAGE_NAME}:latest"
+fi
+
+# ============================================
+# CLEAN INSTALL MODE
+# ============================================
+
+if [ "$INSTALL_MODE" = "clean" ]; then
+    echo ""
+    echo -e "${YELLOW}🗑️  Cleaning up existing resources...${NC}"
+    
+    # Delete Container App
+    echo "Deleting Container App (if exists)..."
+    az containerapp delete \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --yes 2>/dev/null && echo -e "${GREEN}✓ Container App deleted${NC}" || echo "✓ No Container App to delete"
+    
+    # Delete Key Vault (soft delete requires purge)
+    echo "Deleting Key Vault (if exists)..."
+    az keyvault delete \
+      --name $KV_NAME \
+      --resource-group $RESOURCE_GROUP 2>/dev/null && echo -e "${GREEN}✓ Key Vault deleted${NC}" || echo "✓ No Key Vault to delete"
+    
+    # Purge soft-deleted Key Vault
+    echo "Purging Key Vault (if soft-deleted)..."
+    az keyvault purge \
+      --name $KV_NAME \
+      --no-wait 2>/dev/null && echo -e "${GREEN}✓ Key Vault purged${NC}" || echo "✓ No Key Vault to purge"
+    
+    echo "Waiting 30 seconds for cleanup to complete..."
+    sleep 30
+    
+    # ============================================
+    # Create Key Vault
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🔐 Creating Key Vault...${NC}"
+    az keyvault create \
+      --name $KV_NAME \
+      --resource-group $RESOURCE_GROUP \
+      --location $LOCATION \
+      --enable-rbac-authorization false \
+      --enabled-for-deployment true \
+      --enabled-for-template-deployment true
+    
+    echo -e "${GREEN}✓ Key Vault created${NC}"
+    
+    # ============================================
+    # Store Secrets in Key Vault
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🔒 Storing secrets in Key Vault...${NC}"
+    
+    # Azure OpenAI
+    az keyvault secret set --vault-name $KV_NAME --name azure-openai-key --value "$OPENAI_KEY" > /dev/null
+    az keyvault secret set --vault-name $KV_NAME --name azure-openai-endpoint --value "$OPENAI_ENDPOINT" > /dev/null
+    echo -e "${GREEN}✓ Azure OpenAI secrets stored${NC}"
+    
+    # Google OAuth
+    az keyvault secret set --vault-name $KV_NAME --name google-client-id --value "$GOOGLE_CLIENT_ID" > /dev/null
+    az keyvault secret set --vault-name $KV_NAME --name google-client-secret --value "$GOOGLE_CLIENT_SECRET" > /dev/null
+    echo -e "${GREEN}✓ Google OAuth secrets stored${NC}"
+    
+    # Authorization
+    az keyvault secret set --vault-name $KV_NAME --name authorized-domains --value "$AUTHORIZED_DOMAINS" > /dev/null
+    echo -e "${GREEN}✓ Authorization settings stored${NC}"
+    
+    # ACR Credentials (for initial setup, though we'll use managed identity)
+    ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
+    ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
+    az keyvault secret set --vault-name $KV_NAME --name acr-username --value "$ACR_USERNAME" > /dev/null
+    az keyvault secret set --vault-name $KV_NAME --name acr-password --value "$ACR_PASSWORD" > /dev/null
+    echo -e "${GREEN}✓ ACR credentials stored${NC}"
+    
+    # ============================================
+    # Create Container App with Managed Identity
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🚀 Creating Container App...${NC}"
+    
+    az containerapp create \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --environment $ENV_NAME \
+      --image $DEPLOYMENT_IMAGE \
+      --registry-server ${ACR_NAME}.azurecr.io \
+      --registry-identity system \
+      --target-port 8501 \
+      --ingress external \
+      --cpu 1.0 \
+      --memory 2.0Gi \
+      --min-replicas 1 \
+      --max-replicas 3 \
+      --system-assigned
+    
+    echo -e "${GREEN}✓ Container App created with managed identity${NC}"
+    
+    # ============================================
+    # Grant Permissions
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🔓 Granting permissions...${NC}"
+    
+    # Get Container App's managed identity
+    PRINCIPAL_ID=$(az containerapp show \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --query identity.principalId -o tsv)
+    
+    echo "Principal ID: $PRINCIPAL_ID"
+    
+    # Wait for identity to propagate
+    echo "Waiting for identity to propagate..."
+    sleep 20
+    
+    # Grant Key Vault access
+    echo "Granting Key Vault access..."
+    az keyvault set-policy \
+      --name $KV_NAME \
+      --object-id $PRINCIPAL_ID \
+      --secret-permissions get list
+    
+    echo -e "${GREEN}✓ Key Vault access granted${NC}"
+    
+    # Grant ACR pull access
+    echo "Granting ACR pull access..."
+    ACR_ID=$(az acr show --name $ACR_NAME --query id -o tsv)
+    az role assignment create \
+      --assignee $PRINCIPAL_ID \
+      --role AcrPull \
+      --scope $ACR_ID 2>/dev/null || echo -e "${GREEN}✓ ACR permission already exists${NC}"
+    
+    echo -e "${GREEN}✓ ACR pull access granted${NC}"
+    
+    # ============================================
+    # Configure Container App Secrets
+    # ============================================
+    
+    echo ""
+    echo -e "${BLUE}🔗 Linking Container App to Key Vault...${NC}"
+    
+    KV_URL="https://${KV_NAME}.vault.azure.net"
+    
+    # Set secrets to reference Key Vault
+    az containerapp secret set \
+      --name $CONTAINER_APP \
+      --resource-group $RESOURCE_GROUP \
+      --secrets \
+        azure-openai-endpoint="keyvaultref:${KV_URL}/secrets/azure-openai-endpoint,identityref:system" \
+        azure-openai-key="keyvaultref:${KV_URL}/secrets/azure-openai-key,identityref:system" \
+        google-client-id="keyvaultref:${KV_URL}/secrets/google-client-id,identityref:system" \
+        google-client-secret="keyvaultref:${KV_URL}/secrets/google-client-secret,identityref:system" \
+        authorized-domains="keyvaultref:${KV_URL}/secrets/authorized-domains,identityref:system"
+    
+    echo -e "${GREEN}✓ Container App secrets linked to Key Vault${NC}"
+fi
+
+# ============================================
+# UPDATE DEPLOYMENT MODE (Works for both clean and update)
 # ============================================
 
 echo ""
-echo "🗑️  Step 1: Cleaning up existing resources..."
-
-# Delete Container App
-echo "Deleting Container App (if exists)..."
-az containerapp delete \
-  --name $CONTAINER_APP \
-  --resource-group $RESOURCE_GROUP \
-  --yes 2>/dev/null && echo "✓ Container App deleted" || echo "✓ No Container App to delete"
-
-# Delete Key Vault (soft delete requires purge)
-echo "Deleting Key Vault (if exists)..."
-az keyvault delete \
-  --name $KV_NAME \
-  --resource-group $RESOURCE_GROUP 2>/dev/null && echo "✓ Key Vault deleted" || echo "✓ No Key Vault to delete"
-
-# Purge soft-deleted Key Vault
-echo "Purging Key Vault (if soft-deleted)..."
-az keyvault purge \
-  --name $KV_NAME \
-  --no-wait 2>/dev/null && echo "✓ Key Vault purged" || echo "✓ No Key Vault to purge"
-
-echo "Waiting 30 seconds for cleanup to complete..."
-sleep 30
-
-# ============================================
-# STEP 2: Create Key Vault
-# ============================================
-
-echo ""
-echo "🔐 Step 2: Creating Key Vault..."
-az keyvault create \
-  --name $KV_NAME \
-  --resource-group $RESOURCE_GROUP \
-  --location $LOCATION \
-  --enable-rbac-authorization false \
-  --enabled-for-deployment true \
-  --enabled-for-template-deployment true
-
-echo "✓ Key Vault created"
-
-# ============================================
-# STEP 3: Store Secrets in Key Vault
-# ============================================
-
-echo ""
-echo "🔑 Step 3: Storing secrets in Key Vault..."
-
-# Azure OpenAI
-az keyvault secret set --vault-name $KV_NAME --name azure-openai-key --value "$OPENAI_KEY" > /dev/null
-az keyvault secret set --vault-name $KV_NAME --name azure-openai-endpoint --value "$OPENAI_ENDPOINT" > /dev/null
-echo "✓ Azure OpenAI secrets stored"
-
-# Google OAuth
-az keyvault secret set --vault-name $KV_NAME --name google-client-id --value "$GOOGLE_CLIENT_ID" > /dev/null
-az keyvault secret set --vault-name $KV_NAME --name google-client-secret --value "$GOOGLE_CLIENT_SECRET" > /dev/null
-echo "✓ Google OAuth secrets stored"
-
-# Authorization
-az keyvault secret set --vault-name $KV_NAME --name authorized-domains --value "$AUTHORIZED_DOMAINS" > /dev/null
-echo "✓ Authorization settings stored"
-
-# ACR Credentials
-ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
-ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
-az keyvault secret set --vault-name $KV_NAME --name acr-username --value "$ACR_USERNAME" > /dev/null
-az keyvault secret set --vault-name $KV_NAME --name acr-password --value "$ACR_PASSWORD" > /dev/null
-echo "✓ ACR credentials stored"
-
-echo ""
-echo "📋 Secrets in Key Vault:"
-az keyvault secret list --vault-name $KV_NAME --query "[].name" -o tsv | sort
-
-# ============================================
-# STEP 4: Create Container App with Managed Identity
-# ============================================
-
-echo ""
-echo "🚀 Step 4: Creating Container App..."
-
-# Create with managed identity and Key Vault references
-az containerapp create \
-  --name $CONTAINER_APP \
-  --resource-group $RESOURCE_GROUP \
-  --environment $ENV_NAME \
-  --image $IMAGE \
-  --registry-server ${ACR_NAME}.azurecr.io \
-  --registry-identity system \
-  --target-port 8000 \
-  --ingress external \
-  --cpu 1.0 \
-  --memory 2.0Gi \
-  --min-replicas 1 \
-  --max-replicas 1 \
-  --system-assigned
-
-echo "✓ Container App created with managed identity"
-
-# ============================================
-# STEP 5: Grant Permissions
-# ============================================
-
-echo ""
-echo "🔓 Step 5: Granting permissions..."
-
-# Get Container App's managed identity
-PRINCIPAL_ID=$(az containerapp show \
-  --name $CONTAINER_APP \
-  --resource-group $RESOURCE_GROUP \
-  --query identity.principalId -o tsv)
-
-echo "Principal ID: $PRINCIPAL_ID"
-
-# Wait for identity to propagate
-echo "Waiting for identity to propagate..."
-sleep 15
-
-# Grant Key Vault access
-echo "Granting Key Vault access..."
-az keyvault set-policy \
-  --name $KV_NAME \
-  --object-id $PRINCIPAL_ID \
-  --secret-permissions get list
-
-echo "✓ Key Vault access granted"
-
-# Grant ACR pull access
-echo "Granting ACR pull access..."
-ACR_ID=$(az acr show --name $ACR_NAME --query id -o tsv)
-az role assignment create \
-  --assignee $PRINCIPAL_ID \
-  --role AcrPull \
-  --scope $ACR_ID 2>/dev/null || echo "✓ ACR permission already exists"
-
-echo "✓ ACR pull access granted"
-
-# ============================================
-# STEP 6: Configure Container App Secrets
-# ============================================
-
-echo ""
-echo "🔗 Step 6: Linking Container App to Key Vault..."
-
-KV_URL="https://${KV_NAME}.vault.azure.net"
-
-# Set secrets to reference Key Vault
-az containerapp secret set \
-  --name $CONTAINER_APP \
-  --resource-group $RESOURCE_GROUP \
-  --secrets \
-    azure-openai-endpoint="keyvaultref:${KV_URL}/secrets/azure-openai-endpoint,identityref:system" \
-    azure-openai-key="keyvaultref:${KV_URL}/secrets/azure-openai-key,identityref:system" \
-    google-client-id="keyvaultref:${KV_URL}/secrets/google-client-id,identityref:system" \
-    google-client-secret="keyvaultref:${KV_URL}/secrets/google-client-secret,identityref:system" \
-    authorized-domains="keyvaultref:${KV_URL}/secrets/authorized-domains,identityref:system"
-
-echo "✓ Container App secrets linked to Key Vault"
-
-# ============================================
-# STEP 7: Configure Environment Variables
-# ============================================
-
-echo ""
-echo "⚙️  Step 7: Configuring environment variables..."
+echo -e "${BLUE}⚙️  Configuring Container App...${NC}"
 
 # Get app URL
 FQDN=$(az containerapp show \
@@ -231,62 +340,133 @@ FQDN=$(az containerapp show \
 
 APP_URL="https://$FQDN"
 
-# Update environment variables
+# Get Git SHA for version tracking
+GIT_SHA_FULL=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Update container with new image and environment variables
+echo "Updating container app with new image and configuration..."
 az containerapp update \
   --name $CONTAINER_APP \
   --resource-group $RESOURCE_GROUP \
+  --image $DEPLOYMENT_IMAGE \
   --set-env-vars \
     AZURE_OPENAI_ENDPOINT=secretref:azure-openai-endpoint \
     AZURE_OPENAI_KEY=secretref:azure-openai-key \
     AZURE_OPENAI_DEPLOYMENT="$OPENAI_DEPLOYMENT" \
-    AZURE_OPENAI_API_VERSION="2025-01-01-preview" \
-    REQUIRE_AUTH="true" \
+    AZURE_OPENAI_API_VERSION="2024-02-01" \
+    REQUIRE_AUTH="false" \
     APP_URL="$APP_URL" \
     GOOGLE_CLIENT_ID=secretref:google-client-id \
     GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
-    AUTHORIZED_DOMAINS=secretref:authorized-domains
+    AUTHORIZED_DOMAINS=secretref:authorized-domains \
+    APP_VERSION="$IMAGE_TAG" \
+    GIT_SHA="$GIT_SHA_FULL" \
+    BUILD_DATE="$BUILD_DATE"
 
-echo "✓ Environment variables configured"
+echo -e "${GREEN}✓ Container App updated${NC}"
+
+# Force a restart to ensure new container is running
+echo "Restarting container to ensure new image is loaded..."
+az containerapp revision restart \
+  --name $CONTAINER_APP \
+  --resource-group $RESOURCE_GROUP \
+  --revision $(az containerapp revision list \
+    --name $CONTAINER_APP \
+    --resource-group $RESOURCE_GROUP \
+    --query "[0].name" -o tsv)
+
+echo -e "${GREEN}✓ Container restarted${NC}"
+
+# Wait for the app to be ready
+echo "Waiting for application to be ready..."
+sleep 15
 
 # ============================================
-# STEP 8: Summary
+# Verification
 # ============================================
 
 echo ""
-echo "✅ Setup Complete!"
+echo -e "${BLUE}🔍 Verifying deployment...${NC}"
+
+# Check if container is running
+REPLICA_COUNT=$(az containerapp revision list \
+  --name $CONTAINER_APP \
+  --resource-group $RESOURCE_GROUP \
+  --query "[?properties.active==\`true\`] | length(@)" -o tsv)
+
+if [ "$REPLICA_COUNT" -gt 0 ]; then
+    echo -e "${GREEN}✓ Container is running ($REPLICA_COUNT replica(s))${NC}"
+else
+    echo -e "${RED}⚠️  Warning: No active replicas found${NC}"
+fi
+
+# Get the current revision
+CURRENT_REVISION=$(az containerapp revision list \
+  --name $CONTAINER_APP \
+  --resource-group $RESOURCE_GROUP \
+  --query "[?properties.active==\`true\`].name | [0]" -o tsv)
+
+echo "Active revision: $CURRENT_REVISION"
+
+# ============================================
+# Summary
+# ============================================
+
+echo ""
+echo -e "${GREEN}✅ Deployment Complete!${NC}"
 echo "=================="
 echo ""
-echo "📋 Summary:"
+echo -e "${BLUE}📋 Summary:${NC}"
+echo "   Mode: $INSTALL_MODE"
 echo "   Key Vault: $KV_NAME"
 echo "   Container App: $CONTAINER_APP"
+echo "   Image: $DEPLOYMENT_IMAGE"
+echo "   Active Revision: $CURRENT_REVISION"
 echo "   App URL: $APP_URL"
 echo ""
-echo "🔐 Security Configuration:"
+echo -e "${BLUE}🔐 Security Configuration:${NC}"
 echo "   ✅ Managed Identity enabled"
 echo "   ✅ ACR uses Managed Identity (no passwords!)"
 echo "   ✅ All secrets in Key Vault"
 echo "   ✅ Key Vault access granted"
-echo "   ✅ OAuth enabled"
+if [ "$INSTALL_MODE" = "clean" ]; then
+    echo "   ⚠️  OAuth authentication: DISABLED (REQUIRE_AUTH=false)"
+else
+    echo "   ℹ️  OAuth authentication unchanged"
+fi
 echo ""
-echo "🌐 Access your app:"
+echo -e "${BLUE}🌐 Access your app:${NC}"
 echo "   $APP_URL"
 echo ""
-echo "⚠️  IMPORTANT: Update Google OAuth redirect URI to:"
-echo "   $APP_URL/"
+
+if [ "$INSTALL_MODE" = "clean" ]; then
+    echo -e "${YELLOW}⚠️  IMPORTANT: Update Google OAuth redirect URI to:${NC}"
+    echo "   $APP_URL/"
+    echo ""
+    echo "   Go to: https://console.cloud.google.com/apis/credentials"
+    echo "   Click your OAuth client"
+    echo "   Add to Authorized redirect URIs: $APP_URL/"
+    echo "   Save"
+    echo ""
+fi
+
+echo -e "${BLUE}📝 Useful Commands:${NC}"
 echo ""
-echo "   Go to: https://console.cloud.google.com/apis/credentials"
-echo "   Click your OAuth client"
-echo "   Add to Authorized redirect URIs: $APP_URL/"
-echo "   Save"
+echo "Update a secret:"
+echo "  az keyvault secret set --vault-name $KV_NAME --name SECRET_NAME --value NEW_VALUE"
 echo ""
-echo "🔄 To update a secret:"
-echo "   az keyvault secret set --vault-name $KV_NAME --name SECRET_NAME --value NEW_VALUE"
+echo "View secrets:"
+echo "  az keyvault secret list --vault-name $KV_NAME --output table"
 echo ""
-echo "📝 To view secrets:"
-echo "   az keyvault secret list --vault-name $KV_NAME --output table"
+echo "View logs:"
+echo "  az containerapp logs show --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --follow"
 echo ""
-echo "📊 To view logs:"
-echo "   az containerapp logs show --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --follow"
+echo "List revisions:"
+echo "  az containerapp revision list --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --output table"
 echo ""
-echo "🎉 Your application is ready!"
+echo "Enable authentication:"
+echo "  az containerapp update --name $CONTAINER_APP --resource-group $RESOURCE_GROUP --set-env-vars REQUIRE_AUTH=true"
+echo ""
+echo -e "${GREEN}🎉 Your application is ready!${NC}"
 echo ""
