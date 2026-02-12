@@ -438,7 +438,7 @@ az containerapp update \
     GOOGLE_CLIENT_ID=secretref:google-client-id \
     GOOGLE_CLIENT_SECRET=secretref:google-client-secret \
     AUTHORIZED_DOMAINS=secretref:authorized-domains \
-    API_ENABLED="false" \
+    API_ENABLED="true" \
     API_KEY=secretref:api-key \
     API_PORT="8001" \
     API_RATE_LIMIT="100" \
