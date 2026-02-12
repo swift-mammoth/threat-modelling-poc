@@ -39,6 +39,7 @@ COPY --chown=appuser:appuser file_security.py .
 COPY --chown=appuser:appuser api.py .
 COPY --chown=appuser:appuser threat_model_diagram_editor.py .
 COPY --chown=appuser:appuser diagram_threat_integration.py .
+COPY --chown=appuser:appuser .streamlit/ .streamlit/
 COPY --chown=appuser:appuser start.sh .
 # Make startup script executable
 RUN chmod +x start.sh
