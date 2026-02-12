@@ -23,6 +23,16 @@ except ImportError as e:
     print(f"Warning: Security modules not available: {e}")
     SECURITY_MODULES_AVAILABLE = False
 
+# Import draw.io diagram editor modules
+try:
+    import streamlit.components.v1 as components
+    from threat_model_diagram_editor import DiagramEditor, simple_drawio_embed
+    from diagram_threat_integration import integrate_diagram_with_ai, DiagramThreatAnalyzer
+    DIAGRAM_EDITOR_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Diagram editor modules not available: {e}")
+    DIAGRAM_EDITOR_AVAILABLE = False
+
 # Ensure UTF-8 encoding for stdout/stderr
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -459,7 +469,7 @@ with st.sidebar:
         st.write(f"**Resource Group:** {RESOURCE_GROUP}")
 
 # Main content area
-tab1, tab2, tab3 = st.tabs(["📝 Create Threat Model", "📚 Saved Models", "ℹ️ Help"])
+tab1, tab2, tab3, tab4 = st.tabs(["📝 Create Threat Model", "🎨 Diagram Editor", "📚 Saved Models", "ℹ️ Help"])
 
 with tab1:
     st.header("Create New Threat Model")
@@ -693,6 +703,162 @@ with tab1:
         )
 
 with tab2:
+    st.header("🎨 Diagram Editor & Threat Analysis")
+
+    if not DIAGRAM_EDITOR_AVAILABLE:
+        st.error("⚠️ Diagram editor modules not available. Ensure `threat_model_diagram_editor.py` and `diagram_threat_integration.py` are in the container.")
+    else:
+        st.markdown("""
+        Create your architecture diagram using the embedded draw.io editor, then generate a threat model directly from it.
+
+        **Workflow:** Draw diagram → Analyse → Generate Threat Model
+        """)
+
+        d_tab1, d_tab2, d_tab3 = st.tabs(["🖊️ Diagram Editor", "🔍 Analysis", "📊 Threat Model"])
+
+        with d_tab1:
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                editor_height = st.slider("Editor Height (px)", 400, 1200, 700, 50)
+            with col2:
+                editor_mode = st.radio("Mode", ["Full Featured", "Simple Embed"], horizontal=True)
+            with col3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔄 Reset", use_container_width=True):
+                    for k in ["diagram_xml", "diagram_analysis", "diagram_threat_model"]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
+
+            st.markdown("---")
+
+            if editor_mode == "Full Featured":
+                editor_html = DiagramEditor.render_editor(
+                    height=editor_height,
+                    initial_diagram=st.session_state.get("diagram_xml"),
+                    key="main_editor"
+                )
+                components.html(editor_html, height=editor_height + 50)
+            else:
+                simple_drawio_embed(height=editor_height)
+
+            st.markdown("---")
+            ul_col, dl_col = st.columns(2)
+
+            with ul_col:
+                st.subheader("📁 Load Existing Diagram")
+                uploaded_diagram = st.file_uploader(
+                    "Upload draw.io XML",
+                    type=["xml", "drawio"],
+                    help="Upload a previously saved draw.io diagram"
+                )
+                if uploaded_diagram:
+                    diagram_content = uploaded_diagram.read().decode("utf-8")
+                    st.session_state["diagram_xml"] = diagram_content
+                    st.success("✅ Diagram loaded!")
+                    _a = DiagramThreatAnalyzer()
+                    if _a.parse_diagram_xml(diagram_content):
+                        st.metric("Components", len(_a.elements))
+                        st.metric("Data Flows", len(_a.data_flows))
+
+            with dl_col:
+                st.subheader("💾 Download Diagram")
+                if st.session_state.get("diagram_xml"):
+                    st.download_button(
+                        "⬇️ Download XML",
+                        data=st.session_state["diagram_xml"],
+                        file_name=f"diagram_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml",
+                        mime="text/xml"
+                    )
+                else:
+                    st.info("Create or load a diagram to enable download")
+
+        with d_tab2:
+            st.header("🔍 Diagram Analysis")
+            if not st.session_state.get("diagram_xml"):
+                st.warning("⚠️ No diagram loaded. Upload or create one in the **Diagram Editor** tab first.")
+            else:
+                _, btn_col = st.columns([4, 1])
+                with btn_col:
+                    if st.button("🔍 Analyse", type="primary", use_container_width=True):
+                        with st.spinner("Analysing diagram structure..."):
+                            analysis = integrate_diagram_with_ai(
+                                st.session_state["diagram_xml"],
+                                framework=framework
+                            )
+                            st.session_state["diagram_analysis"] = analysis
+
+                if st.session_state.get("diagram_analysis"):
+                    _analysis = st.session_state["diagram_analysis"]
+                    if _analysis.get("success"):
+                        _stats = _analysis.get("statistics", {})
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Components", _stats.get("elements", 0))
+                        c2.metric("Data Flows", _stats.get("flows", 0))
+                        c3.metric("Trust Boundaries", _stats.get("boundaries", 0))
+
+                        st.markdown("### 📝 Generated System Description")
+                        st.text_area(
+                            "This is sent to AI as context",
+                            value=_analysis.get("system_description", ""),
+                            height=200,
+                            disabled=True
+                        )
+
+                        if _analysis.get("analysis_hints"):
+                            st.markdown("### ⚠️ Initial Risk Indicators")
+                            for _cat, _hints in _analysis["analysis_hints"].items():
+                                with st.expander(f"⚠️ {_cat}"):
+                                    for _h in _hints:
+                                        st.warning(_h)
+
+                        with st.expander("🔍 Raw Parsed Diagram Data"):
+                            st.json(_analysis.get("diagram_json", "{}"))
+
+                        st.markdown("---")
+                        if st.button("🚀 Generate Threat Model from Diagram", type="primary", use_container_width=True):
+                            st.session_state["run_diagram_tm"] = True
+                            st.rerun()
+                    else:
+                        st.error(f"❌ Analysis failed: {_analysis.get('error', 'Unknown error')}")
+                else:
+                    st.info("👆 Click **Analyse** to parse your diagram")
+
+        with d_tab3:
+            st.header("📊 Diagram-Based Threat Model")
+
+            if st.session_state.pop("run_diagram_tm", False):
+                _analysis = st.session_state.get("diagram_analysis", {})
+                _ai_prompt = _analysis.get("ai_prompt", "")
+                if _ai_prompt:
+                    with st.spinner("🤖 Generating threat model from diagram..."):
+                        _tm = generate_threat_model(_ai_prompt, framework)
+                        if _tm:
+                            st.session_state["diagram_threat_model"] = _tm
+                            st.success("✅ Threat model generated!")
+                else:
+                    st.error("No diagram analysis found — please run Analysis first.")
+
+            if st.session_state.get("diagram_threat_model"):
+                _tm_result = st.session_state["diagram_threat_model"]
+                _, _dl_col = st.columns([3, 1])
+                with _dl_col:
+                    st.download_button(
+                        "⬇️ Download Markdown",
+                        data=_tm_result,
+                        file_name=f"diagram_threat_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        mime="text/markdown"
+                    )
+                st.markdown(_tm_result)
+            else:
+                st.info("""
+                💡 **No threat model yet**
+
+                1. Draw or upload a diagram in the **Diagram Editor** tab
+                2. Click **Analyse** in the Analysis tab
+                3. Click **Generate Threat Model from Diagram**
+                """)
+
+with tab3:
     st.header("Saved Threat Models")
     
     try:
@@ -730,7 +896,7 @@ with tab2:
     except Exception as e:
         st.error(f"Error loading saved models: {str(e)}")
 
-with tab3:
+with tab4:
     st.header("How to Use This Tool")
     
     st.markdown("""
