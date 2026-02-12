@@ -212,11 +212,34 @@ function exportXml(){{
   if(!graph)return;
   var xml=mxUtils.getXml(new mxCodec(mxUtils.createXmlDocument()).encode(graph.getModel()));
   sessionStorage.setItem('drawio_xml',xml);
-  if(navigator.clipboard&&navigator.clipboard.writeText){{
-    navigator.clipboard.writeText(xml)
-      .then(function(){{st2('XML copied — paste into .xml file and upload below');}})
-      .catch(function(){{showBox(xml);}});
-  }}else{{showBox(xml);}}
+
+  // Push XML into the Streamlit text_area with data-testid="diagram-xml-bridge"
+  // so Python can read it via session_state without any file upload.
+  try{{
+    var ta=window.parent.document.querySelector('textarea[data-testid="diagram-xml-bridge"]');
+    if(!ta){{
+      // Fallback: find by placeholder text
+      ta=window.parent.document.querySelector('textarea[placeholder="diagram-xml-bridge"]');
+    }}
+    if(ta){{
+      // Set value and fire React synthetic change event
+      var nativeInputValueSetter=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;
+      nativeInputValueSetter.call(ta,xml);
+      ta.dispatchEvent(new Event('input',{{bubbles:true}}));
+      st2('\u2705 Diagram saved — click Analyse tab');
+    }}else{{
+      // Textarea not found in parent - copy to clipboard as fallback
+      if(navigator.clipboard&&navigator.clipboard.writeText){{
+        navigator.clipboard.writeText(xml).then(function(){{
+          st2('XML copied to clipboard — paste into the XML box below');
+        }}).catch(function(){{showBox(xml);}});
+      }}else{{showBox(xml);}}
+    }}
+  }}catch(e){{
+    // Cross-origin or other error - fall back to showBox
+    showBox(xml);
+    st2('Copy the XML and paste into the XML box below');
+  }}
 }}
 function showBox(xml){{
   var ta=document.createElement('textarea');
