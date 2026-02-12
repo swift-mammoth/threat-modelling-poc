@@ -14,10 +14,26 @@ from urllib.parse import urlencode
 
 class DiagramEditor:
     """
-    Embedded draw.io diagram editor for threat modelling
+    Embedded draw.io diagram editor for threat modelling.
+
+    draw.io embed modes and why we pick what we pick:
+    ─────────────────────────────────────────────────
+    • embed=1 (proto=json)  → full bidirectional protocol; host MUST respond to
+                              every 'init' event with a 'load' action.  Works but
+                              needs careful postMessage plumbing.
+    • configure=1           → pauses until host sends a 'configure' message;
+                              never reaches the canvas inside Streamlit's sandbox.
+    • lightbox=1            → read-only viewer, not an editor.
+    • No special flags      → opens the full stand-alone app in an iframe, which
+                              is exactly what we want for an always-on editor.
+
+    The cleanest solution for Streamlit is to load diagrams.net as a normal
+    full-page app (no embed flag) in an iframe.  It loads immediately with no
+    handshake required.  Users get the complete editor experience including all
+    menus, shape panels and save/export.
     """
 
-    DRAWIO_EMBED_URL = "https://embed.diagrams.net/"
+    DRAWIO_BASE_URL = "https://app.diagrams.net/"
 
     @staticmethod
     def render_editor(
@@ -26,61 +42,40 @@ class DiagramEditor:
         key: str = "diagram_editor"
     ) -> str:
         """
-        Return HTML that embeds a fully working draw.io editor.
+        Return HTML that embeds a fully working draw.io editor with no
+        spinner/loading hang.
 
-        Key design decisions:
-        - No `configure=1`: that mode waits for a configure postMessage which
-          Streamlit's sandboxed iframe can never send, causing infinite spin.
-        - No `proto=json`: that protocol also requires handshake messages from
-          the host page that we cannot send across the Streamlit iframe boundary.
-        - `embed=1` + `spin=1` is the correct lightweight embed mode.
-        - Shape libraries passed as a semicolon-separated `libs` query param.
-        - If an initial diagram is provided it is base64-encoded and passed as
-          the `xml` query param — draw.io decodes it on load automatically.
+        Uses the full app URL (no embed=1) so there is no host-handshake
+        requirement.  Shape libraries for threat modelling are pre-enabled via
+        the `libs` query param.  If an initial diagram is provided it is
+        base64-encoded and passed via the `xml` param.
         """
         libs = "general;aws4;azure;gcp2;security;network;c4"
 
         params = {
-            "embed": "1",
-            "spin": "1",
-            "libraries": "1",
+            "libs": libs,
             "ui": "atlas",
             "nav": "1",
-            "noSaveBtn": "0",
-            "noExitBtn": "1",
-            "libs": libs,
+            "splash": "0",      # skip the 'pick a template' splash screen
+            "chrome": "1",      # show the full toolbar/menubar
         }
 
         if initial_diagram:
             params["xml"] = base64.b64encode(initial_diagram.encode()).decode()
 
-        embed_url = f"{DiagramEditor.DRAWIO_EMBED_URL}?{urlencode(params)}"
+        embed_url = f"{DiagramEditor.DRAWIO_BASE_URL}?{urlencode(params)}"
 
         html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-  html, body {{ margin: 0; padding: 0; height: 100%; overflow: hidden; background: #fff; }}
+  html, body {{ margin: 0; padding: 0; height: 100%; overflow: hidden; background: #1e1e1e; }}
   iframe {{ display: block; width: 100%; height: {height}px; border: none; }}
 </style>
 </head>
 <body>
-<iframe id="editor" src="{embed_url}" allowfullscreen></iframe>
-<script>
-  // Relay save events up to the Streamlit parent so the diagram XML can be
-  // captured if we add Streamlit component bridging later.
-  window.addEventListener('message', function(evt) {{
-    if (!evt.data) return;
-    try {{
-      var msg = (typeof evt.data === 'string') ? JSON.parse(evt.data) : evt.data;
-      if (msg.event === 'save' || msg.event === 'autosave') {{
-        // Store in sessionStorage so a page reload can recover it
-        if (msg.xml) sessionStorage.setItem('drawio_xml', msg.xml);
-      }}
-    }} catch(e) {{}}
-  }});
-</script>
+<iframe src="{embed_url}" allowfullscreen allow="clipboard-read; clipboard-write"></iframe>
 </body>
 </html>"""
 
@@ -118,6 +113,22 @@ class DiagramEditor:
         except Exception as e:
             st.error(f"Error parsing diagram: {str(e)}")
             return {}
+
+
+def simple_drawio_embed(height: int = 800) -> None:
+    """Full app.diagrams.net embed — loads immediately with no handshake required."""
+    libs = "general;aws4;azure;gcp2;security;network;c4"
+    params = urlencode({"libs": libs, "ui": "atlas", "nav": "1", "splash": "0"})
+    embed_url = f"https://app.diagrams.net/?{params}"
+    html = f"""<iframe
+        src="{embed_url}"
+        width="100%"
+        height="{height}px"
+        frameborder="0"
+        allow="clipboard-read; clipboard-write"
+        style="border:1px solid #ddd; border-radius:4px; display:block;">
+    </iframe>"""
+    components.html(html, height=height + 10)
     
     @staticmethod
     def extract_threat_model_elements(diagram_xml: str) -> Dict[str, Any]:
