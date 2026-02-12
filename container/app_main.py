@@ -240,10 +240,13 @@ def generate_threat_model(architecture_description, framework="STRIDE", images=N
             # Sanitize
             additional_context = sanitize_input(additional_context)
     
-    # Ensure clean UTF-8 encoding
-    architecture_description = architecture_description.encode('utf-8', errors='ignore').decode('utf-8')
+    # Strip non-ASCII — some httpx/openai versions fail on non-ASCII in prompts
+    def _to_ascii(s):
+        if not isinstance(s, str): s = str(s)
+        return s.encode('ascii', errors='ignore').decode('ascii')
+    architecture_description = _to_ascii(architecture_description)
     if additional_context:
-        additional_context = additional_context.encode('utf-8', errors='ignore').decode('utf-8')
+        additional_context = _to_ascii(additional_context)
     
     system_prompt = f"""You are an expert security architect specializing in threat modeling for enterprise applications.
 
@@ -323,9 +326,15 @@ Be specific, actionable, and prioritize based on business impact."""
             st.error("Azure OpenAI not configured. Please check application settings.")
             return None
         
-        # Clean the prompts for encoding
-        system_prompt_clean = system_prompt.encode('utf-8', errors='replace').decode('utf-8')
-        user_prompt_clean = user_prompt.encode('utf-8', errors='replace').decode('utf-8')
+        # Clean prompts — strip non-ASCII that some httpx versions can't handle
+        def _clean(s):
+            if not isinstance(s, str):
+                s = str(s)
+            # Encode to ASCII dropping anything outside range, then back to str
+            return s.encode('ascii', errors='ignore').decode('ascii')
+
+        system_prompt_clean = _clean(system_prompt)
+        user_prompt_clean   = _clean(user_prompt)
         
         # Build messages array
         messages = [
