@@ -440,7 +440,7 @@ az containerapp update \
     AUTHORIZED_DOMAINS=secretref:authorized-domains \
     API_ENABLED="false" \
     API_KEY=secretref:api-key \
-    API_PORT="8000" \
+    API_PORT="8001" \
     API_RATE_LIMIT="100" \
     APP_VERSION="${IMAGE_TAG}" \
     GIT_SHA="$GIT_SHA_FULL" \
