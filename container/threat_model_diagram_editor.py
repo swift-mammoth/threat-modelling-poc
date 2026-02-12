@@ -9,68 +9,16 @@ import base64
 import json
 from typing import Optional, Dict, Any
 import xml.etree.ElementTree as ET
+from urllib.parse import urlencode
+
 
 class DiagramEditor:
     """
     Embedded draw.io diagram editor for threat modelling
     """
-    
-    # Draw.io embed URL - using the official diagrams.net embed version
+
     DRAWIO_EMBED_URL = "https://embed.diagrams.net/"
-    
-    # Threat modelling shape libraries
-    THREAT_MODEL_LIBRARIES = [
-        "general",
-        "aws4",
-        "azure",
-        "gcp2",
-        "security",
-        "network",
-        "c4",
-        "threat_modelling"  # Custom library if created
-    ]
-    
-    @staticmethod
-    def create_embed_config(
-        diagram_xml: Optional[str] = None,
-        ui_theme: str = "atlas",
-        libraries: list = None
-    ) -> Dict[str, Any]:
-        """
-        Create draw.io embed configuration
-        
-        Args:
-            diagram_xml: Optional existing diagram XML
-            ui_theme: draw.io theme (atlas, kennedy, dark, min)
-            libraries: List of shape libraries to enable
-            
-        Returns:
-            Configuration dict for draw.io embed
-        """
-        if libraries is None:
-            libraries = DiagramEditor.THREAT_MODEL_LIBRARIES
-            
-        config = {
-            "ui": ui_theme,
-            "spin": True,
-            "libraries": True,
-            "saveAndExit": True,
-            "noSaveBtn": False,
-            "noExitBtn": False,
-            "configure": True,
-            "libs": ";".join(libraries),
-            "chrome": 0,  # Minimal chrome
-            "nav": 1,  # Enable navigation
-            "toolbar": "1",  # Show toolbar
-        }
-        
-        if diagram_xml:
-            # Encode existing diagram
-            encoded = base64.b64encode(diagram_xml.encode()).decode()
-            config["xml"] = encoded
-            
-        return config
-    
+
     @staticmethod
     def render_editor(
         height: int = 800,
@@ -78,90 +26,98 @@ class DiagramEditor:
         key: str = "diagram_editor"
     ) -> str:
         """
-        Render the draw.io embedded editor
-        
-        Args:
-            height: Height of the editor in pixels
-            initial_diagram: Optional XML of initial diagram
-            key: Unique key for the component
-            
-        Returns:
-            HTML for embedding draw.io
+        Return HTML that embeds a fully working draw.io editor.
+
+        Key design decisions:
+        - No `configure=1`: that mode waits for a configure postMessage which
+          Streamlit's sandboxed iframe can never send, causing infinite spin.
+        - No `proto=json`: that protocol also requires handshake messages from
+          the host page that we cannot send across the Streamlit iframe boundary.
+        - `embed=1` + `spin=1` is the correct lightweight embed mode.
+        - Shape libraries passed as a semicolon-separated `libs` query param.
+        - If an initial diagram is provided it is base64-encoded and passed as
+          the `xml` query param — draw.io decodes it on load automatically.
         """
-        config = DiagramEditor.create_embed_config(
-            diagram_xml=initial_diagram,
-            ui_theme="atlas"
-        )
-        
-        # Build URL with parameters
-        params = "&".join([f"{k}={v}" for k, v in config.items()])
-        embed_url = f"{DiagramEditor.DRAWIO_EMBED_URL}?{params}"
-        
-        # Create HTML for iframe with messaging
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body {{ margin: 0; padding: 0; overflow: hidden; }}
-                #drawio-container {{ width: 100%; height: {height}px; border: 1px solid #ddd; }}
-            </style>
-        </head>
-        <body>
-            <iframe 
-                id="drawio-container"
-                src="{embed_url}"
-                frameborder="0"
-            ></iframe>
-            
-            <script>
-                // Handle messages from draw.io
-                window.addEventListener('message', function(evt) {{
-                    if (evt.data.length > 0) {{
-                        try {{
-                            var msg = JSON.parse(evt.data);
-                            
-                            // Handle different message types
-                            if (msg.event === 'init') {{
-                                console.log('Draw.io initialized');
-                            }}
-                            else if (msg.event === 'save') {{
-                                // Diagram saved
-                                console.log('Diagram saved');
-                                // Send data back to Streamlit
-                                window.parent.postMessage({{
-                                    type: 'diagram_saved',
-                                    xml: msg.xml
-                                }}, '*');
-                            }}
-                            else if (msg.event === 'export') {{
-                                // Diagram exported
-                                console.log('Diagram exported');
-                            }}
-                            else if (msg.event === 'exit') {{
-                                console.log('Editor closed');
-                            }}
-                        }} catch(e) {{
-                            console.log('Non-JSON message:', evt.data);
-                        }}
-                    }}
-                }});
-                
-                // Send configuration to draw.io
-                var iframe = document.getElementById('drawio-container');
-                iframe.addEventListener('load', function() {{
-                    // Configure draw.io after load
-                    iframe.contentWindow.postMessage(
-                        JSON.stringify({{action: 'load'}}),
-                        '*'
-                    );
-                }});
-            </script>
-        </body>
-        </html>
-        """
-        
+        libs = "general;aws4;azure;gcp2;security;network;c4"
+
+        params = {
+            "embed": "1",
+            "spin": "1",
+            "libraries": "1",
+            "ui": "atlas",
+            "nav": "1",
+            "noSaveBtn": "0",
+            "noExitBtn": "1",
+            "libs": libs,
+        }
+
+        if initial_diagram:
+            params["xml"] = base64.b64encode(initial_diagram.encode()).decode()
+
+        embed_url = f"{DiagramEditor.DRAWIO_EMBED_URL}?{urlencode(params)}"
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body {{ margin: 0; padding: 0; height: 100%; overflow: hidden; background: #fff; }}
+  iframe {{ display: block; width: 100%; height: {height}px; border: none; }}
+</style>
+</head>
+<body>
+<iframe id="editor" src="{embed_url}" allowfullscreen></iframe>
+<script>
+  // Relay save events up to the Streamlit parent so the diagram XML can be
+  // captured if we add Streamlit component bridging later.
+  window.addEventListener('message', function(evt) {{
+    if (!evt.data) return;
+    try {{
+      var msg = (typeof evt.data === 'string') ? JSON.parse(evt.data) : evt.data;
+      if (msg.event === 'save' || msg.event === 'autosave') {{
+        // Store in sessionStorage so a page reload can recover it
+        if (msg.xml) sessionStorage.setItem('drawio_xml', msg.xml);
+      }}
+    }} catch(e) {{}}
+  }});
+</script>
+</body>
+</html>"""
+
         return html
+
+    @staticmethod
+    def extract_threat_model_elements(diagram_xml: str) -> Dict[str, Any]:
+        """Extract threat model elements from draw.io XML."""
+        try:
+            root = ET.fromstring(diagram_xml)
+            elements = {
+                "processes": [],
+                "data_stores": [],
+                "external_entities": [],
+                "data_flows": [],
+                "trust_boundaries": []
+            }
+            for cell in root.iter('mxCell'):
+                value = cell.get('value', '')
+                style = cell.get('style', '')
+                if 'ellipse' in style or 'process' in style.lower():
+                    elements["processes"].append({"id": cell.get('id'), "name": value, "style": style})
+                elif 'cylinder' in style or 'datastore' in style.lower():
+                    elements["data_stores"].append({"id": cell.get('id'), "name": value, "style": style})
+                elif 'actor' in style.lower() or 'external' in value.lower():
+                    elements["external_entities"].append({"id": cell.get('id'), "name": value, "style": style})
+                elif cell.get('edge') == '1':
+                    elements["data_flows"].append({
+                        "id": cell.get('id'), "label": value,
+                        "source": cell.get('source'), "target": cell.get('target')
+                    })
+                elif 'dashed' in style or 'boundary' in value.lower():
+                    elements["trust_boundaries"].append({"id": cell.get('id'), "name": value})
+            return elements
+        except Exception as e:
+            st.error(f"Error parsing diagram: {str(e)}")
+            return {}
     
     @staticmethod
     def extract_threat_model_elements(diagram_xml: str) -> Dict[str, Any]:
@@ -333,26 +289,19 @@ def render_diagram_editor_tab():
 
 # Alternative: Simpler iframe embed for quick integration
 def simple_drawio_embed(height: int = 800) -> None:
-    """
-    Simple draw.io embed without complex messaging
-    Good for quick prototyping
-    """
+    """Simple draw.io embed — straightforward iframe, no protocol handshake required."""
     embed_url = (
         "https://embed.diagrams.net/"
-        "?embed=1&ui=atlas&spin=1&libraries=1&proto=json"
-        "&saveAndExit=1&noSaveBtn=0&noExitBtn=0"
+        "?embed=1&ui=atlas&spin=1&libraries=1&nav=1"
+        "&libs=general;aws4;azure;gcp2;security;network;c4"
     )
-    
-    html = f"""
-    <iframe 
-        src="{embed_url}" 
-        width="100%" 
-        height="{height}px" 
+    html = f"""<iframe
+        src="{embed_url}"
+        width="100%"
+        height="{height}px"
         frameborder="0"
-        style="border: 1px solid #ddd; border-radius: 4px;"
-    ></iframe>
-    """
-    
+        style="border:1px solid #ddd; border-radius:4px; display:block;">
+    </iframe>"""
     components.html(html, height=height + 10)
 
 

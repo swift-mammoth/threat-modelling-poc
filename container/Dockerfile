@@ -34,11 +34,11 @@ COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 # Copy application code
 COPY --chown=appuser:appuser app.py .
 COPY --chown=appuser:appuser app_main.py .
-COPY --chown=appuser:appuser threat_model_diagram_editor.py .
-COPY --chown=appuser:appuser diagram_threat_integration.py .
 COPY --chown=appuser:appuser prompt_protection.py .
 COPY --chown=appuser:appuser file_security.py .
 COPY --chown=appuser:appuser api.py .
+COPY --chown=appuser:appuser threat_model_diagram_editor.py .
+COPY --chown=appuser:appuser diagram_threat_integration.py .
 COPY --chown=appuser:appuser start.sh .
 # Make startup script executable
 RUN chmod +x start.sh
