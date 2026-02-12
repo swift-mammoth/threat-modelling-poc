@@ -1,5 +1,5 @@
 # Multi-stage build for smaller, more secure image
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim as builder
 # Suppress debconf warnings
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
