@@ -741,6 +741,23 @@ with tab2:
             else:
                 simple_drawio_embed(height=editor_height)
 
+            # Hidden bridge: mxGraph JS writes XML here via window.parent DOM access.
+            # Label is collapsed so it's invisible; the textarea is found by placeholder.
+            xml_from_editor = st.text_area(
+                "diagram-xml-bridge",
+                value=st.session_state.get("diagram_xml", ""),
+                key="diagram_xml_input",
+                label_visibility="collapsed",
+                placeholder="diagram-xml-bridge",
+                height=68,
+            )
+            if xml_from_editor and xml_from_editor.strip().startswith("<"):
+                st.session_state["diagram_xml"] = xml_from_editor
+                # Show a quiet confirmation
+                if xml_from_editor != st.session_state.get("_last_xml_preview", ""):
+                    st.session_state["_last_xml_preview"] = xml_from_editor
+                    st.caption("✅ Diagram captured — switch to the Analysis tab")
+
             st.markdown("---")
             ul_col, dl_col = st.columns(2)
 
@@ -967,4 +984,3 @@ st.markdown("---")
 version = os.getenv("APP_VERSION", "dev")
 git_sha = os.getenv("GIT_SHA", "unknown")
 st.markdown(f"🛡️ **AI Threat Modeling POC** | Powered by Azure OpenAI | Built with Streamlit | Version: `{version}` | Commit: `{git_sha[:7]}`")
-
