@@ -365,6 +365,17 @@ Be specific, actionable, and prioritize based on business impact."""
                 "content": user_prompt_clean
             })
         
+        # Final safety pass — recursively strip non-ASCII from all message strings
+        def _deep_clean(obj):
+            if isinstance(obj, str):
+                return obj.encode('ascii', errors='ignore').decode('ascii')
+            if isinstance(obj, list):
+                return [_deep_clean(i) for i in obj]
+            if isinstance(obj, dict):
+                return {k: _deep_clean(v) for k, v in obj.items()}
+            return obj
+        messages = _deep_clean(messages)
+
         response = client.chat.completions.create(
             model=deployment_name,
             messages=messages,
@@ -373,10 +384,6 @@ Be specific, actionable, and prioritize based on business impact."""
         )
         
         return response.choices[0].message.content
-    
-    except UnicodeEncodeError as e:
-        st.error(f"Encoding error: {str(e)}. Please check your input for special characters.")
-        return None
     except Exception as e:
         st.error(f"Error generating threat model: {str(e)}")
         st.code(traceback.format_exc())
