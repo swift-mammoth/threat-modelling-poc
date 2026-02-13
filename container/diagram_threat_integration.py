@@ -273,7 +273,7 @@ class DiagramThreatAnalyzer:
             source = self._get_element_name(flow.source_id)
             target = self._get_element_name(flow.target_id)
             
-            flow_desc = f"- {source} → {target}"
+            flow_desc = f"- {source} -> {target}"
             if flow.label:
                 flow_desc += f": {flow.label}"
             if flow.protocol != 'unknown':
