@@ -1,5 +1,5 @@
 # Multi-stage build for smaller, more secure image
-FROM python:3.11-slim as builder
+FROM python:3.14-slim as builder
 # Suppress debconf warnings
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
@@ -13,7 +13,7 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 # Final stage - distroless-like slim image
-FROM python:3.11-slim
+FROM python:3.14-slim
 # Build arguments
 ARG GIT_SHA=unknown
 ARG APP_VERSION=dev
