@@ -36,7 +36,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
@@ -64,7 +64,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     
     - name: Build image locally (no push)
       uses: docker/build-push-action@v6
@@ -111,7 +111,7 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     
     - name: Set build information
       id: build-info
